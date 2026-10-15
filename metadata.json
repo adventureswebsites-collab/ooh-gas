@@ -1,0 +1,6 @@
+{
+  "name": "GasiGo - LPG Gas Delivery Nairobi",
+  "description": "On-demand LPG cooking gas delivery marketplace connecting Nairobi households with trusted suppliers including K-Gas, TotalEnergies, and Shell Gas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
