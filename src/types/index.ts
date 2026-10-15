@@ -141,6 +141,20 @@ export interface OnDemandOrderState {
   handoverPin: string;
   etaMinutes: number;
   stage: OnDemandRequestStage;
+  // Customer & live driver tracking attributes
+  customerId?: string;
+  deliveryOtp?: string;
+  deliveryOtpVerifiedAt?: string;
+  driverLastLocation?: {
+    lat: number;
+    lng: number;
+    accuracy?: number;
+    heading?: number;
+    speed?: number;
+  };
+  driverLastUpdatedAt?: string;
+  driverDistanceRemainingKm?: number;
+  routeCoordinates?: [number, number][];
   // Enhanced lifecycle and real-time matching attributes
   orderStatus?: string;
   supplierOfferCountdown?: number;

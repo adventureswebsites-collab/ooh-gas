@@ -266,11 +266,36 @@ export interface MultiSupplierOrder {
   scheduledFor?: string;
   customerNotes?: string;
   cancellationReason?: string;
+  deliveryOtp?: string;
+  deliveryOtpVerifiedAt?: string;
+  driverEtaMinutes?: number;
+  driverDistanceKm?: number;
+  driverLastLocation?: {
+    lat: number;
+    lng: number;
+    accuracy?: number;
+    heading?: number;
+    speed?: number;
+  };
+  driverLastUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
   items?: MultiSupplierOrderItem[];
   supplier?: SupplierBusiness;
   delivery?: DeliveryTrackingInfo;
+}
+
+export interface CustomerAuthSession {
+  user: {
+    id: string;
+    email: string;
+    fullName: string;
+    phoneNumber: string;
+    role: UserRole;
+    createdAt: string;
+  } | null;
+  profile: UserProfile | null;
+  token?: string;
 }
 
 export interface MultiSupplierOrderItem {

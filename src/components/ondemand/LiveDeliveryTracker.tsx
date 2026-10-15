@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { OnDemandOrderState, Supplier, RiderInfo, NairobiLocation } from '../../types';
+import { connectToRealtimeStream } from '../../services/multiSupplierService';
 import { MapboxDeliveryMap } from '../map/MapboxDeliveryMap';
 import { RiderCallModal } from './RiderCallModal';
 import { RiderChatModal } from './RiderChatModal';
@@ -47,6 +48,28 @@ export const LiveDeliveryTracker: React.FC<LiveDeliveryTrackerProps> = ({
 
   const rider = order.assignedRider || riders[0];
   const supplier = order.matchedSupplier || suppliers[0];
+
+  // Subscribe to real-time order and delivery updates from the backend
+  React.useEffect(() => {
+    const unsubscribe = connectToRealtimeStream((event: string, payload: any) => {
+      if (payload?.orderId && payload.orderId !== order.orderId) return;
+
+      if (event === 'delivery_status_changed' || event === 'order_status_changed') {
+        const nextStatus = payload.status || payload.orderStatus;
+        if (nextStatus === 'PREPARING') {
+          onUpdateStage('rider_assigned');
+        } else if (nextStatus === 'OUT_FOR_DELIVERY') {
+          onUpdateStage('in_transit');
+        } else if (nextStatus === 'DELIVERED') {
+          onUpdateStage('completed');
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [order.orderId, onUpdateStage]);
 
   // Derive progress percentage for map animation
   let riderProgress = 35;

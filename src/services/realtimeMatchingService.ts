@@ -303,8 +303,17 @@ export async function createAndMatchOrder(
       throw new Error(`Quantity must be greater than zero for product: ${master.brand}`);
     }
 
-    // Benchmark base pricing fallback
-    const basePrice = item.purchaseType === 'refill' ? 1300 : 3800;
+    // Benchmark base pricing fallback based on cylinder size
+    let basePrice = 1300;
+    if (master.cylinderSize === '13kg') {
+      basePrice = item.purchaseType === 'refill' ? 2850 : 6900;
+    } else if (master.cylinderSize === '6kg') {
+      basePrice = item.purchaseType === 'refill' ? 1300 : 3800;
+    } else if (master.cylinderSize === '29kg') {
+      basePrice = item.purchaseType === 'refill' ? 6500 : 14500;
+    } else {
+      basePrice = item.purchaseType === 'refill' ? 2000 : 5000;
+    }
     subtotal += basePrice * item.quantity;
 
     verifiedItems.push({
@@ -813,4 +822,81 @@ export function getOffersForSupplier(supplierId: string): SupplierOrderOffer[] {
 
 export function getMatchingSessionByOrderId(orderId: string): OrderMatchingSession | undefined {
   return Array.from(matchingSessions.values()).find((s) => s.orderId === orderId);
+}
+
+// In-Memory Driver Telemetry Map (synced with Supabase driver_locations table)
+export interface DriverTelemetryRecord {
+  driverId: string;
+  orderId: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  heading?: number;
+  speed?: number;
+  recordedAt: string;
+}
+
+const driverLocations = new Map<string, DriverTelemetryRecord>();
+
+/**
+ * 9. Real-Time Driver Telemetry Ingestion with GPS Quality & Inaccuracy Filtering
+ */
+export function recordDriverLocation(data: {
+  driverId: string;
+  orderId: string;
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  heading?: number;
+  speed?: number;
+}): { recorded: boolean; reason?: string; location?: DriverTelemetryRecord } {
+  const { driverId, orderId, latitude, longitude, accuracy, heading, speed } = data;
+
+  if (!driverId || !orderId) {
+    return { recorded: false, reason: 'Driver ID and Order ID are required' };
+  }
+
+  // Filter out inaccurate coordinates (> 100 meters) to prevent jumpy map markers
+  if (accuracy > 100) {
+    return {
+      recorded: false,
+      reason: `Accuracy (${accuracy.toFixed(1)}m) is too poor. Threshold is <= 100m.`,
+    };
+  }
+
+  // Filter out non-Kenyan coordinates
+  if (latitude < -5.0 || latitude > 5.5 || longitude < 33.5 || longitude > 42.5) {
+    return { recorded: false, reason: 'Coordinates outside Kenya geographic bounds' };
+  }
+
+  const record: DriverTelemetryRecord = {
+    driverId,
+    orderId,
+    latitude,
+    longitude,
+    accuracy,
+    heading: heading ?? 0,
+    speed: speed ?? 0,
+    recordedAt: new Date().toISOString(),
+  };
+
+  driverLocations.set(orderId, record);
+
+  // Broadcast to customer and operations in real-time
+  broadcastEvent('driver_location_updated', {
+    orderId,
+    driverId,
+    latitude,
+    longitude,
+    accuracy,
+    heading: record.heading,
+    speed: record.speed,
+    recordedAt: record.recordedAt,
+  });
+
+  return { recorded: true, location: record };
+}
+
+export function getDriverLocationForOrder(orderId: string): DriverTelemetryRecord | undefined {
+  return driverLocations.get(orderId);
 }
