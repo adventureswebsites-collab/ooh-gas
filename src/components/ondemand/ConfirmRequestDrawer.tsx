@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CylinderSize,
   PurchaseType,
@@ -9,7 +9,26 @@ import {
 } from '../../types';
 import { MOCK_SAVED_ADDRESSES, MARKET_BENCHMARK_PRICES } from '../../data/mockData';
 import { validateOrderEligibility } from '../../services/deliveryZoneService';
-import { X, MapPin, Scale, Phone, User, Check, ArrowRight, Banknote, AlertTriangle, Loader2 } from 'lucide-react';
+import {
+  CustomerAuthSession,
+  getCustomerSavedAddresses,
+} from '../../services/customerAuthService';
+import { CustomerAddress } from '../../types/multisupplier';
+import {
+  X,
+  MapPin,
+  Scale,
+  Phone,
+  User,
+  Check,
+  ArrowRight,
+  Banknote,
+  AlertTriangle,
+  Loader2,
+  ShieldCheck,
+  Lock,
+  Sparkles,
+} from 'lucide-react';
 
 interface ConfirmRequestDrawerProps {
   isOpen: boolean;
@@ -20,6 +39,16 @@ interface ConfirmRequestDrawerProps {
   quantity: number;
   currentLocation: NairobiLocation;
   coverageResult?: CoverageCheckResult | null;
+  customerSession?: CustomerAuthSession | null;
+  onRequestLogin?: (pendingDetails: {
+    fullName: string;
+    phoneNumber: string;
+    estate: string;
+    building: string;
+    unitNumber: string;
+    deliveryInstructions: string;
+    paymentMethod: PaymentMethod;
+  }) => void;
   onConfirmAndMatch: (details: {
     fullName: string;
     phoneNumber: string;
@@ -40,25 +69,49 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
   quantity,
   currentLocation,
   coverageResult,
+  customerSession,
+  onRequestLogin,
   onConfirmAndMatch,
 }) => {
   const defaultSaved = MOCK_SAVED_ADDRESSES[0];
-  const [fullName, setFullName] = useState(defaultSaved.fullName);
-  const [phoneNumber, setPhoneNumber] = useState(defaultSaved.phoneNumber);
+  const [fullName, setFullName] = useState(customerSession?.user.fullName || defaultSaved.fullName);
+  const [phoneNumber, setPhoneNumber] = useState(customerSession?.user.phoneNumber || defaultSaved.phoneNumber);
   const [estate, setEstate] = useState(currentLocation.name);
   const [building, setBuilding] = useState(defaultSaved.building);
   const [unitNumber, setUnitNumber] = useState(defaultSaved.unitNumber);
   const [deliveryInstructions, setDeliveryInstructions] = useState(defaultSaved.deliveryInstructions);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('mpesa_on_delivery');
 
+  // Customer Saved Addresses from database
+  const [savedAddresses, setSavedAddresses] = useState<CustomerAddress[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+
   // Backend verification state
   const [isValidating, setIsValidating] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setEstate(currentLocation.name);
     setValidationError(null);
   }, [currentLocation.name]);
+
+  useEffect(() => {
+    if (customerSession) {
+      setFullName(customerSession.user.fullName);
+      setPhoneNumber(customerSession.user.phoneNumber);
+
+      getCustomerSavedAddresses().then((addrs) => {
+        setSavedAddresses(addrs);
+        const defaultAddr = addrs.find((a) => a.isDefault) || addrs[0];
+        if (defaultAddr) {
+          setSelectedAddressId(defaultAddr.id);
+          if (defaultAddr.buildingName) setBuilding(defaultAddr.buildingName);
+          if (defaultAddr.houseOrFlatNumber) setUnitNumber(defaultAddr.houseOrFlatNumber);
+          if (defaultAddr.deliveryNotes) setDeliveryInstructions(defaultAddr.deliveryNotes);
+        }
+      });
+    }
+  }, [customerSession]);
 
   if (!isOpen) return null;
 
@@ -68,13 +121,37 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
 
   // Use zone-specific delivery fee from backend coverage
   const zoneConfig = coverageResult?.eligibleSuppliers?.[0]?.zoneConfig;
-  const deliveryFee = zoneConfig?.deliveryFee ?? 100;
+  const deliveryFee = zoneConfig?.deliveryFee ?? 0;
   const subtotal = unitPrice * quantity;
   const totalPrice = subtotal + deliveryFee;
+
+  const handleSelectSavedAddress = (addr: CustomerAddress) => {
+    setSelectedAddressId(addr.id);
+    if (addr.buildingName) setBuilding(addr.buildingName);
+    if (addr.houseOrFlatNumber) setUnitNumber(addr.houseOrFlatNumber);
+    if (addr.deliveryNotes) setDeliveryInstructions(addr.deliveryNotes);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
+
+    const pendingDetails = {
+      fullName,
+      phoneNumber,
+      estate,
+      building,
+      unitNumber,
+      deliveryInstructions,
+      paymentMethod,
+    };
+
+    // REQUIRE LOGIN BEFORE COMPLETING ORDER
+    if (!customerSession) {
+      onRequestLogin?.(pendingDetails);
+      return;
+    }
+
     setIsValidating(true);
 
     // Authoritative backend recheck before accepting order
@@ -95,15 +172,7 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
       return;
     }
 
-    onConfirmAndMatch({
-      fullName,
-      phoneNumber,
-      estate,
-      building,
-      unitNumber,
-      deliveryInstructions,
-      paymentMethod,
-    });
+    onConfirmAndMatch(pendingDetails);
   };
 
   return (
@@ -144,6 +213,31 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="overflow-y-auto p-4 space-y-4 flex-1">
+          {/* Authentication Status Banner */}
+          {customerSession ? (
+            <div className="p-2.5 rounded-xl bg-[#f0fdf4] border border-[#bbf7d0] text-xs text-[#14532d] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-[#166534] shrink-0" />
+                <span className="truncate">
+                  Ordering as <strong>{customerSession.user.fullName}</strong> ({customerSession.user.phoneNumber})
+                </span>
+              </div>
+              <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">
+                Logged In ✓
+              </span>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5 animate-in fade-in">
+              <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block">Sign In Required to Complete Order</strong>
+                <p className="text-[11px] text-amber-800 mt-0.5">
+                  You will be prompted to sign in or create your customer account so you can track your live courier and verify cylinder weight.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Summary Box */}
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
             <div>
@@ -151,7 +245,7 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
                 {quantity}x {selectedSize} ({purchaseType === 'refill' ? 'Refill' : 'Complete Set'})
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5">
-                Gas: KSh {subtotal.toLocaleString()} + Delivery: KSh {deliveryFee}
+                Gas: KSh {subtotal.toLocaleString()} + Zone Delivery: {deliveryFee === 0 ? 'Free' : `KSh ${deliveryFee}`}
               </div>
             </div>
             <div className="text-right">
@@ -162,11 +256,39 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
             </div>
           </div>
 
-          {/* Delivery Address */}
+          {/* Saved Addresses Quick Pick (if logged in and has saved addresses) */}
+          {customerSession && savedAddresses.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-700 block uppercase tracking-wider">
+                Select Saved Address
+              </label>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {savedAddresses.map((addr) => (
+                  <button
+                    key={addr.id}
+                    type="button"
+                    onClick={() => handleSelectSavedAddress(addr)}
+                    className={`py-1 px-2.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1 ${
+                      selectedAddressId === addr.id
+                        ? 'bg-[#14532d] text-white border-[#14532d]'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{addr.label}</span>
+                    {addr.isDefault && (
+                      <span className="text-[9px] opacity-80">(Default)</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Delivery Address Fields */}
           <div className="space-y-2.5">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-[#14532d]" />
-              <span>Delivery Address</span>
+              <span>Delivery Recipient Details</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -181,7 +303,7 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#14532d]"
+                    className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
                     placeholder="Full Name"
                   />
                 </div>
@@ -198,7 +320,7 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
                     required
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
-                    className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#14532d]"
+                    className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
                     placeholder="0712 345 678"
                   />
                 </div>
@@ -215,48 +337,62 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
                   required
                   value={building}
                   onChange={(e) => setBuilding(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#14532d]"
+                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
                   placeholder="e.g. Silver Oak Court"
                 />
               </div>
 
               <div>
                 <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-                  House / Unit / Floor
+                  House / Unit #
                 </label>
                 <input
                   type="text"
                   required
                   value={unitNumber}
                   onChange={(e) => setUnitNumber(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#14532d]"
-                  placeholder="e.g. Apt 4B"
+                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
+                  placeholder="e.g. Block B, Apt 4B"
                 />
               </div>
             </div>
 
             <div>
               <label className="text-[11px] font-semibold text-slate-700 block mb-1">
-                Gate Instructions (Optional)
+                Estate / Delivery Area
               </label>
               <input
                 type="text"
+                required
+                value={estate}
+                onChange={(e) => setEstate(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
+                placeholder="e.g. Kilimani"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                Doorstep Delivery Instructions
+              </label>
+              <textarea
                 value={deliveryInstructions}
                 onChange={(e) => setDeliveryInstructions(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#14532d]"
-                placeholder="e.g. Call at the main gate."
+                rows={2}
+                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#14532d]"
+                placeholder="e.g. Call when at the security gate, 2nd floor, elevator available"
               />
             </div>
           </div>
 
-          {/* Payment Option */}
+          {/* Payment Method Selection */}
           <div className="space-y-2">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
               <Banknote className="w-3.5 h-3.5 text-[#14532d]" />
-              <span>Payment Method</span>
+              <span>Payment Option</span>
             </h3>
 
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <button
                 type="button"
                 onClick={() => setPaymentMethod('mpesa_on_delivery')}
@@ -272,10 +408,10 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
                   </div>
                   <div>
                     <div className="text-xs font-bold text-slate-900">
-                      M-Pesa on Delivery
+                      Lipa Na M-Pesa on Delivery
                     </div>
                     <div className="text-[10px] text-slate-500">
-                      Pay via M-Pesa Buy Goods/Till after doorstep weight check
+                      Pay via M-Pesa prompt after doorstep weight verification
                     </div>
                   </div>
                 </div>
@@ -341,6 +477,12 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-lime-300" />
                 <span>Verifying Coverage & Supplier Stock...</span>
+              </>
+            ) : !customerSession ? (
+              <>
+                <Lock className="w-4 h-4 text-[#bef264]" />
+                <span>Sign In to Complete Order</span>
+                <ArrowRight className="w-4 h-4 text-[#bef264]" />
               </>
             ) : (
               <>

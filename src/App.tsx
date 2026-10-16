@@ -14,6 +14,15 @@ import { OrderFlowModal } from './components/ordering/OrderFlowModal';
 import { OrdersView, WalletView, ProfileView } from './components/SecondaryViews';
 import { SupplierDashboardModal } from './components/supplier/SupplierDashboardModal';
 import { AdminOrdersMatchingView } from './components/admin/AdminOrdersMatchingView';
+import { AuthModal } from './components/auth/AuthModal';
+import { LoginPage } from './components/auth/LoginPage';
+import { SignUpPage } from './components/auth/SignUpPage';
+import { PasswordResetPage } from './components/auth/PasswordResetPage';
+import {
+  CustomerAuthSession,
+  subscribeToCustomerAuth,
+  getCurrentCustomerSession,
+} from './services/customerAuthService';
 import { createRealtimeOrder } from './services/multiSupplierService';
 import { MULTI_SUPPLIER_BUSINESSES, MASTER_PRODUCTS } from './data/multiSupplierData';
 import {
@@ -84,6 +93,124 @@ export default function App() {
   // Supplier Portal and Admin Monitor Modal states
   const [isSupplierPortalOpen, setIsSupplierPortalOpen] = useState(false);
   const [isAdminOrdersViewOpen, setIsAdminOrdersViewOpen] = useState(false);
+
+  // Customer Authentication & Session State
+  const [customerSession, setCustomerSession] = useState<CustomerAuthSession | null>(() =>
+    getCurrentCustomerSession()
+  );
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'signup'>('signin');
+  const [authRedirectReason, setAuthRedirectReason] = useState<string | null>(null);
+  const [authRedirectDestination, setAuthRedirectDestination] = useState<string | null>(null);
+  const [pendingOrderDetails, setPendingOrderDetails] = useState<{
+    fullName: string;
+    phoneNumber: string;
+    estate: string;
+    building: string;
+    unitNumber: string;
+    deliveryInstructions: string;
+    paymentMethod: PaymentMethod;
+  } | null>(null);
+
+  // Standalone full-page view for Sign Up / Login / Reset Password
+  const [authPage, setAuthPage] = useState<'login' | 'signup' | 'reset-password' | null>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#login' || hash.startsWith('#login')) return 'login';
+      if (hash === '#signup' || hash.startsWith('#signup') || hash === '#register') return 'signup';
+      if (hash === '#reset-password' || hash.startsWith('#reset-password')) return 'reset-password';
+      const urlParams = new URLSearchParams(window.location.search);
+      const page = urlParams.get('page');
+      if (page === 'login') return 'login';
+      if (page === 'signup' || page === 'register') return 'signup';
+      if (page === 'reset-password') return 'reset-password';
+    }
+    return null;
+  });
+
+  // Listen to hash changes for deep linking
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#login' || hash.startsWith('#login')) {
+        setAuthPage('login');
+      } else if (hash === '#signup' || hash.startsWith('#signup') || hash === '#register') {
+        setAuthPage('signup');
+      } else if (hash === '#reset-password' || hash.startsWith('#reset-password')) {
+        setAuthPage('reset-password');
+      } else if (hash === '#orders') {
+        setAuthPage(null);
+        setActiveTab('orders');
+      } else if (hash === '#profile') {
+        setAuthPage(null);
+        setActiveTab('profile');
+      } else if (hash === '' || hash === '#home') {
+        setAuthPage(null);
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Subscribe to real-time auth changes
+  useEffect(() => {
+    const unsubscribe = subscribeToCustomerAuth((session) => {
+      setCustomerSession(session);
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleOpenAuthPage = (
+    mode: 'login' | 'signup' | 'reset-password' = 'login',
+    reason?: string,
+    destination?: string
+  ) => {
+    setAuthPage(mode);
+    setAuthRedirectReason(reason || null);
+    if (destination) setAuthRedirectDestination(destination);
+    try {
+      window.location.hash = `#${mode}`;
+    } catch (_) {}
+  };
+
+  const handleCloseAuthPage = () => {
+    setAuthPage(null);
+    setAuthRedirectReason(null);
+    try {
+      if (
+        window.location.hash.startsWith('#login') ||
+        window.location.hash.startsWith('#signup') ||
+        window.location.hash.startsWith('#reset-password')
+      ) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } catch (_) {}
+  };
+
+  const handleOpenAuthModal = (mode: 'signin' | 'signup' = 'signin', reason?: string) => {
+    setAuthInitialMode(mode);
+    setAuthRedirectReason(reason || null);
+    setIsAuthModalOpen(true);
+  };
+
+  const handleRequestLoginForOrder = (details: {
+    fullName: string;
+    phoneNumber: string;
+    estate: string;
+    building: string;
+    unitNumber: string;
+    deliveryInstructions: string;
+    paymentMethod: PaymentMethod;
+  }) => {
+    setPendingOrderDetails(details);
+    setAuthRedirectDestination('order');
+    handleOpenAuthPage(
+      'login',
+      'Please sign in or create an account to complete your gas order.',
+      'order'
+    );
+  };
 
   // Developer testing harness: preserved outside normal customer UI (active via ?dev=true or Alt+D)
   const [isDevTestingMode, setIsDevTestingMode] = useState<boolean>(() => {
@@ -197,6 +324,7 @@ export default function App() {
 
     try {
       const serverOrder = await createRealtimeOrder({
+        customerId: customerSession?.user.id,
         customerName: details.fullName,
         phoneNumber: details.phoneNumber,
         deliveryAddress: {
@@ -235,6 +363,41 @@ export default function App() {
       }
     } catch (err) {
       console.warn('[Matching Flow] Server-side order creation notice:', err);
+    }
+  };
+
+  // Resume and submit pending order after successful customer login/registration
+  const handleAuthSuccess = (session: CustomerAuthSession) => {
+    setCustomerSession(session);
+    setAuthPage(null);
+    setIsAuthModalOpen(false);
+
+    try {
+      if (
+        window.location.hash.startsWith('#login') ||
+        window.location.hash.startsWith('#signup') ||
+        window.location.hash.startsWith('#reset-password')
+      ) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } catch (_) {}
+
+    if (pendingOrderDetails) {
+      const detailsToSubmit = {
+        ...pendingOrderDetails,
+        fullName: session.user.fullName,
+        phoneNumber: session.user.phoneNumber,
+      };
+      setPendingOrderDetails(null);
+      setAuthRedirectReason(null);
+      setAuthRedirectDestination(null);
+      handleConfirmAndStartMatching(detailsToSubmit);
+    } else if (authRedirectDestination === 'orders') {
+      setActiveTab('orders');
+      setAuthRedirectDestination(null);
+    } else if (authRedirectDestination === 'profile') {
+      setActiveTab('profile');
+      setAuthRedirectDestination(null);
     }
   };
 
@@ -407,6 +570,12 @@ export default function App() {
           onOpenLocationModal={() => setIsLocationModalOpen(true)}
           onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
           unreadCount={unreadCount}
+          customerSession={customerSession}
+          onOpenAuthModal={(mode) => handleOpenAuthPage(mode === 'signup' ? 'signup' : 'login')}
+          onOpenProfile={() => {
+            setAuthPage(null);
+            setActiveTab('profile');
+          }}
         />
 
         {/* Real-time Multi-Supplier Operations Switcher */}
@@ -441,7 +610,34 @@ export default function App() {
 
         {/* Dynamic Main Body Content */}
         <div className="w-full max-w-xl mx-auto flex-1 flex flex-col px-3 min-[360px]:px-4 sm:px-5 py-3 sm:py-4">
-          {activeTab === 'home' && (
+          {/* Standalone Full-Page Auth Views (Sign Up, Login, Reset Password) */}
+          {authPage === 'login' && (
+            <LoginPage
+              onBackToHome={handleCloseAuthPage}
+              onNavigateToSignUp={() => handleOpenAuthPage('signup')}
+              onNavigateToPasswordReset={() => handleOpenAuthPage('reset-password')}
+              redirectReason={authRedirectReason}
+              onSuccess={handleAuthSuccess}
+            />
+          )}
+
+          {authPage === 'signup' && (
+            <SignUpPage
+              onBackToHome={handleCloseAuthPage}
+              onNavigateToSignIn={() => handleOpenAuthPage('login')}
+              redirectReason={authRedirectReason}
+              onSuccess={handleAuthSuccess}
+            />
+          )}
+
+          {authPage === 'reset-password' && (
+            <PasswordResetPage
+              onBackToLogin={() => handleOpenAuthPage('login')}
+              onBackToHome={handleCloseAuthPage}
+            />
+          )}
+
+          {authPage === null && activeTab === 'home' && (
             <>
               {/* If Live Tracker is open, show the dedicated live delivery tracker view */}
               {isLiveTrackerOpen && activeOrder ? (
@@ -579,6 +775,14 @@ export default function App() {
               <OrdersView
                 onBackToHome={() => setActiveTab('home')}
                 activeOrder={activeOrder}
+                customerSession={customerSession}
+                onOpenAuthModal={(mode) =>
+                  handleOpenAuthPage(
+                    mode === 'signup' ? 'signup' : 'login',
+                    'Please sign in or create an account to view your order history.',
+                    'orders'
+                  )
+                }
                 onOpenTracker={() => {
                   setActiveTab('home');
                   setIsLiveTrackerOpen(true);
@@ -595,13 +799,29 @@ export default function App() {
 
           {activeTab === 'profile' && (
             <main className="flex-1 pt-1 pb-24">
-              <ProfileView onBackToHome={() => setActiveTab('home')} />
+              <ProfileView
+                onBackToHome={() => setActiveTab('home')}
+                customerSession={customerSession}
+                onOpenAuthModal={(mode) =>
+                  handleOpenAuthPage(
+                    mode === 'signup' ? 'signup' : 'login',
+                    'Please sign in or create an account to view your customer profile and addresses.',
+                    'profile'
+                  )
+                }
+              />
             </main>
           )}
         </div>
 
         {/* Bottom Navigation with Safe Area Support */}
-        <BottomNav activeTab={activeTab} onChangeTab={(tab) => setActiveTab(tab)} />
+        <BottomNav
+          activeTab={activeTab}
+          onChangeTab={(tab) => {
+            setAuthPage(null);
+            setActiveTab(tab);
+          }}
+        />
       </div>
 
       {/* Interactive Modals */}
@@ -624,7 +844,7 @@ export default function App() {
         onClose={() => setIsSafetyModalOpen(false)}
       />
 
-      {/* Request Flow Step 1: Confirm Details */}
+      {/* Request Flow Step 1: Confirm Details with Login Requirement */}
       <ConfirmRequestDrawer
         isOpen={isConfirmDrawerOpen}
         onClose={() => setIsConfirmDrawerOpen(false)}
@@ -634,6 +854,8 @@ export default function App() {
         quantity={quantity}
         currentLocation={currentLocation}
         coverageResult={coverageResult}
+        customerSession={customerSession}
+        onRequestLogin={handleRequestLoginForOrder}
         onConfirmAndMatch={handleConfirmAndStartMatching}
       />
 
@@ -653,7 +875,7 @@ export default function App() {
         />
       )}
 
-      {/* Manual Specific Supplier Order Modal (if customer selects depot directly) */}
+      {/* Manual Specific Supplier Order Modal with Login Requirement */}
       <OrderFlowModal
         isOpen={isManualOrderModalOpen}
         onClose={() => setIsManualOrderModalOpen(false)}
@@ -661,6 +883,24 @@ export default function App() {
         initialSize={selectedSize}
         initialPurchaseType={purchaseType}
         currentLocationName={currentLocation.name}
+        customerSession={customerSession}
+        onRequestLogin={() => {
+          setIsManualOrderModalOpen(false);
+          handleOpenAuthPage(
+            'login',
+            `Please sign in or create an account to place your order with ${selectedSupplierForManualOrder?.name || 'this supplier'}.`,
+            'manual_order'
+          );
+        }}
+      />
+
+      {/* Customer In-Flow Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        initialMode={authInitialMode}
+        redirectReason={authRedirectReason}
+        onSuccess={handleAuthSuccess}
       />
 
       {/* Supplier Operations Portal Modal (Offer Accept/Reject & Dispatches) */}

@@ -15,16 +15,22 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
+import { CustomerAuthSession } from '../../services/customerAuthService';
+
 interface StepOrderSummaryProps {
   orderState: CustomerOrderFlowState;
   onEditStep: (step: 'cylinder' | 'address' | 'timing') => void;
   onFinishFlow: () => void;
+  customerSession?: CustomerAuthSession | null;
+  onRequestLogin?: () => void;
 }
 
 export const StepOrderSummary: React.FC<StepOrderSummaryProps> = ({
   orderState,
   onEditStep,
   onFinishFlow,
+  customerSession,
+  onRequestLogin,
 }) => {
   const [showCheckoutPreviewModal, setShowCheckoutPreviewModal] = useState(false);
 
@@ -285,7 +291,13 @@ export const StepOrderSummary: React.FC<StepOrderSummaryProps> = ({
       <div className="pt-2">
         <button
           type="button"
-          onClick={() => setShowCheckoutPreviewModal(true)}
+          onClick={() => {
+            if (!customerSession) {
+              onRequestLogin?.();
+              return;
+            }
+            setShowCheckoutPreviewModal(true);
+          }}
           className="w-full py-3 px-4 min-h-[46px] rounded-xl bg-[#14532d] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-bold text-sm flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer"
         >
           <span>Continue to Checkout</span>

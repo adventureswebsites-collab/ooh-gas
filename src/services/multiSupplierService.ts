@@ -314,6 +314,7 @@ export async function validateSupplierOrder(params: {
  * Submits customer order to authoritative server matching engine
  */
 export async function createRealtimeOrder(payload: {
+  customerId?: string;
   customerName: string;
   phoneNumber: string;
   deliveryAddress: {

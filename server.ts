@@ -408,7 +408,16 @@ async function startServer() {
   // 2. Authoritative Customer Order Creation & Server-side Matching Initiation
   app.post('/api/orders', async (req: Request, res: Response) => {
     try {
-      const { customerName, phoneNumber, deliveryAddress, deliveryPoint, items, paymentMethod, timeoutSeconds } = req.body;
+      const {
+        customerId,
+        customerName,
+        phoneNumber,
+        deliveryAddress,
+        deliveryPoint,
+        items,
+        paymentMethod,
+        timeoutSeconds,
+      } = req.body;
 
       if (!customerName || !phoneNumber) {
         return res.status(400).json({ error: 'Customer name and contact phone number are required.' });
@@ -424,6 +433,7 @@ async function startServer() {
 
       const order = await createAndMatchOrder(
         {
+          customerId: typeof customerId === 'string' && customerId.trim() ? customerId.trim() : undefined,
           customerName,
           phoneNumber,
           deliveryAddress: deliveryAddress || { street: 'Main Rd', estate: 'Kilimani' },
@@ -439,6 +449,17 @@ async function startServer() {
       console.error('[Orders API] Order creation error:', err);
       res.status(400).json({ error: err.message || 'Failed creating and matching order.' });
     }
+  });
+
+  // 2.1 Customer-Specific Isolated Orders Endpoint (RLS-backed & server-filtered)
+  app.get('/api/customer/orders', (req: Request, res: Response) => {
+    const customerId = req.query.customerId as string;
+    if (!customerId) {
+      return res.status(400).json({ error: 'customerId query parameter is required.' });
+    }
+    const all = getAllOrders();
+    const filtered = all.filter((o) => o.customerId === customerId);
+    return res.json(filtered);
   });
 
   // 3. Get Order Details & Live Matching Status

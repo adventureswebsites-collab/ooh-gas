@@ -7,6 +7,7 @@ import { StepDeliveryLocation } from './StepDeliveryLocation';
 import { StepDeliveryTiming } from './StepDeliveryTiming';
 import { StepOrderSummary } from './StepOrderSummary';
 import { SupplierLettermark } from '../BrandIdentities';
+import { CustomerAuthSession } from '../../services/customerAuthService';
 import { X, ArrowLeft, ArrowRight } from 'lucide-react';
 
 interface OrderFlowModalProps {
@@ -16,6 +17,8 @@ interface OrderFlowModalProps {
   initialSize?: CylinderSize;
   initialPurchaseType?: PurchaseType;
   currentLocationName?: string;
+  customerSession?: CustomerAuthSession | null;
+  onRequestLogin?: () => void;
 }
 
 export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
@@ -25,6 +28,8 @@ export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
   initialSize = '13kg',
   initialPurchaseType = 'refill',
   currentLocationName = 'Kilimani, Nairobi',
+  customerSession,
+  onRequestLogin,
 }) => {
   if (!isOpen || !supplier) return null;
 
@@ -228,6 +233,8 @@ export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
               orderState={orderState}
               onEditStep={(step) => setCurrentStep(step)}
               onFinishFlow={onClose}
+              customerSession={customerSession}
+              onRequestLogin={onRequestLogin}
             />
           )}
         </div>
