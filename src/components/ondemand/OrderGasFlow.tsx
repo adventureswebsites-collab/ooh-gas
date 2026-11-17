@@ -43,7 +43,9 @@ import {
   Calendar,
   Zap,
   X,
+  AlertTriangle,
 } from 'lucide-react';
+import { filterQualifiedSuppliers } from '../../services/supplierMatchingService';
 import img6kg from '../../assets/images/lpg_cylinder_6kg_1791888342390.jpg';
 import img13kg from '../../assets/images/lpg_cylinder_13kg_1791888361570.jpg';
 import img29kg from '../../assets/images/lpg_cylinder_29kg_1791888380688.jpg';
@@ -102,6 +104,7 @@ interface OrderGasFlowProps {
   onToggleFavoriteSupplier: (supplierId: string) => void;
   customerSession: CustomerAuthSession | null;
   onOpenLocationModal: () => void;
+  onChangeDestinationOnMap?: () => void;
   onSelectLocation: (loc: NairobiLocation) => void;
   onRequestAuthForCheckout: (stepToReturnTo: OrderFlowStep) => void;
   onSubmitConfirmedOrder: (
@@ -140,6 +143,7 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   onToggleFavoriteSupplier,
   customerSession,
   onOpenLocationModal,
+  onChangeDestinationOnMap,
   onSelectLocation,
   onRequestAuthForCheckout,
   onSubmitConfirmedOrder,
@@ -236,21 +240,25 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
     }
   }, [customerSession]);
 
-  // Compute shop list based on coverage + brand filter
-  const availableShops = React.useMemo(() => {
-    const baseList =
-      coverageResult?.eligibleSuppliers && coverageResult.eligibleSuppliers.length > 0
-        ? coverageResult.eligibleSuppliers
-        : suppliers;
-
-    const sorted = [...baseList].sort((a, b) => {
-      const aBrandMatch = brandPreference === 'Any' || a.brand === brandPreference ? 0 : 1;
-      const bBrandMatch = brandPreference === 'Any' || b.brand === brandPreference ? 0 : 1;
-      if (aBrandMatch !== bBrandMatch) return aBrandMatch - bBrandMatch;
-      return a.distanceKm - b.distanceKm;
+  // Compute qualified shop list enforcing zone coverage, open status, stock availability, and brand preference
+  const supplierMatching = React.useMemo(() => {
+    return filterQualifiedSuppliers({
+      suppliers,
+      coverageResult,
+      destination: currentLocation,
+      selectedSize,
+      purchaseType,
+      brandPreference,
     });
-    return sorted;
-  }, [coverageResult, suppliers, brandPreference]);
+  }, [suppliers, coverageResult, currentLocation, selectedSize, purchaseType, brandPreference]);
+
+  const availableShops = supplierMatching.qualifiedSuppliers;
+
+  useEffect(() => {
+    if (availableShops.length > 0 && !availableShops.some((s) => s.id === selectedSupplier.id)) {
+      setSelectedSupplier(availableShops[0]);
+    }
+  }, [availableShops, selectedSupplier.id]);
 
   const getShopPriceForSelection = (shop: Supplier) => {
     const cyl = shop.cylinders.find((c) => c.size === selectedSize);
@@ -403,7 +411,32 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
       {/* SCREEN 4: SELECT YOUR GAS                                */}
       {/* ======================================================== */}
       {step === 'select_gas' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        <div className="space-y-4">
+          {/* Confirmed Delivery Destination Bar */}
+          <div className="bg-[#EDF6F1] border border-[#226946]/20 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-[#226946] text-white flex items-center justify-center shrink-0">
+                <MapPin className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-extrabold uppercase tracking-wider text-[#226946]">
+                  Delivering To
+                </p>
+                <p className="text-xs sm:text-sm font-extrabold text-[#15191C] truncate">
+                  {currentLocation.name}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onChangeDestinationOnMap || onOpenLocationModal}
+              className="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 text-xs font-bold text-[#226946] hover:bg-neutral-50 cursor-pointer shrink-0"
+            >
+              Change Pin
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
           <div className="lg:col-span-7 bg-white rounded-3xl border border-neutral-200/80 p-4 sm:p-6 space-y-5 shadow-2xs">
             {/* Delivery Timing Toggle (Order Now vs Schedule) */}
             <div className="space-y-3">
@@ -655,15 +688,16 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
               onClick={() => setStep('nearby_shops')}
               className="w-full min-h-[50px] py-3.5 px-5 rounded-2xl bg-[#226946] hover:bg-[#195136] text-white font-bold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-xs"
             >
-              <span>Find Nearby Gas Shops</span>
+              <span>Find Gas Suppliers</span>
               <ArrowRight className="w-4 h-4" />
             </button>
+          </div>
           </div>
         </div>
       )}
 
       {/* ======================================================== */}
-      {/* SCREEN 5: NEARBY GAS SHOPS                               */}
+      {/* SCREEN 5: QUALIFIED GAS SUPPLIERS SERVING DESTINATION     */}
       {/* ======================================================== */}
       {step === 'nearby_shops' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
@@ -677,23 +711,79 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
               heightClassName="h-[220px] sm:h-[280px] lg:h-[400px]"
               hideSearchOverlay={true}
             />
-            <div className="px-1 flex items-center justify-between text-xs text-[#6B7280]">
-              <span>
-                Showing {availableShops.length} nearby shops for{' '}
-                <strong className="text-[#15191C]">{selectedSize}</strong>
+            <div className="px-1 flex items-center justify-between gap-2 text-xs text-[#6B7280]">
+              <span className="truncate">
+                {supplierMatching.isCovered ? (
+                  <>
+                    <strong className="text-[#15191C]">{availableShops.length}</strong> serving{' '}
+                    <strong className="text-[#15191C]">{currentLocation.name.split(',')[0]}</strong> ·{' '}
+                    {selectedSize}
+                  </>
+                ) : (
+                  <span className="text-rose-600 font-semibold">Outside active delivery zone</span>
+                )}
               </span>
               <button
                 type="button"
-                onClick={onOpenLocationModal}
-                className="font-bold text-[#226946] hover:underline cursor-pointer"
+                onClick={onChangeDestinationOnMap || onOpenLocationModal}
+                className="font-bold text-[#226946] hover:underline cursor-pointer shrink-0"
               >
-                Change Area
+                Adjust Pin
               </button>
             </div>
           </div>
 
           <div className="lg:col-span-7 space-y-3">
-            {availableShops.map((shop) => {
+            {/* Verified Zone + Stock Matching Summary */}
+            <div
+              className={`rounded-2xl px-3.5 py-2.5 border text-xs font-semibold flex items-center gap-2 ${
+                supplierMatching.isCovered && availableShops.length > 0
+                  ? 'bg-[#EDF6F1] border-[#226946]/20 text-[#195136]'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}
+            >
+              {supplierMatching.isCovered && availableShops.length > 0 ? (
+                <CheckCircle2 className="w-4 h-4 text-[#226946] shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              )}
+              <span>{supplierMatching.message}</span>
+            </div>
+
+            {availableShops.length === 0 ? (
+              <div className="rounded-3xl border border-neutral-200 bg-white p-6 text-center space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-extrabold text-[#15191C]">
+                    {supplierMatching.emptyReason === 'out_of_zone'
+                      ? 'Delivery Location Outside Service Zone'
+                      : `No Stock for ${selectedSize} at This Location`}
+                  </h3>
+                  <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed">
+                    {supplierMatching.message}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={onChangeDestinationOnMap || onOpenLocationModal}
+                    className="px-4 py-2.5 rounded-xl bg-[#226946] hover:bg-[#195136] text-white text-xs font-bold cursor-pointer"
+                  >
+                    Move Delivery Pin
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStep('select_gas')}
+                    className="px-4 py-2.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 text-[#15191C] text-xs font-bold cursor-pointer"
+                  >
+                    Change Cylinder Size
+                  </button>
+                </div>
+              </div>
+            ) : (
+            availableShops.map((shop) => {
               const isSelected = selectedSupplier.id === shop.id;
               const isFav = favoriteSupplierIds.includes(shop.id);
               const shopUnitPrice = getShopPriceForSelection(shop);
@@ -802,7 +892,7 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
                   </div>
                 </div>
               );
-            })}
+            }))}
           </div>
         </div>
       )}

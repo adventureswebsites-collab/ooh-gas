@@ -1024,16 +1024,20 @@ async function startServer() {
   });
 
   app.post('/api/auth/register-email', (req: Request, res: Response) => {
-    const { firstName, lastName, email, password } = req.body || {};
+    const { firstName, lastName, phoneNumber, email, password } = req.body || {};
     const cleanFirst = String(firstName || '').trim();
     const cleanLast = String(lastName || '').trim();
     const cleanEmail = String(email || '').trim().toLowerCase();
+    const parsedPhone = normalizeServerKenyanPhone(String(phoneNumber || ''));
 
     if (cleanFirst.length < 2) {
       return res.status(400).json({ error: 'First name must be at least 2 characters.' });
     }
     if (cleanLast.length < 2) {
       return res.status(400).json({ error: 'Last name must be at least 2 characters.' });
+    }
+    if (!parsedPhone.valid) {
+      return res.status(400).json({ error: 'Please enter a valid Kenyan phone number (e.g. 712 345 678).' });
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
@@ -1042,10 +1046,17 @@ async function startServer() {
       return res.status(400).json({ error: 'Password must be at least 6 characters.' });
     }
 
-    const duplicate = serverCustomers.find((c) => c.email.toLowerCase() === cleanEmail);
-    if (duplicate) {
+    const duplicateEmail = serverCustomers.find((c) => c.email.toLowerCase() === cleanEmail);
+    if (duplicateEmail) {
       return res.status(409).json({
         error: 'An account with this email already exists. Please log in instead.',
+      });
+    }
+
+    const duplicatePhone = serverCustomers.find((c) => c.e164Phone === parsedPhone.e164Phone);
+    if (duplicatePhone) {
+      return res.status(409).json({
+        error: 'An account with this phone number already exists. Please log in instead.',
       });
     }
 
@@ -1053,8 +1064,8 @@ async function startServer() {
     const record: ServerCustomerRecord = {
       id: `cust-${crypto.randomUUID()}`,
       fullName: `${cleanFirst} ${cleanLast}`.trim(),
-      phoneNumber: '',
-      e164Phone: '',
+      phoneNumber: parsedPhone.normalizedPhone,
+      e164Phone: parsedPhone.e164Phone,
       email: cleanEmail,
       passwordHash: hashServerPassword(String(password)),
       role: 'customer',

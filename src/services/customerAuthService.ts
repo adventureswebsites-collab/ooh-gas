@@ -1454,6 +1454,7 @@ export async function completePhoneRegistration(params: {
 export async function signUpWithEmailAccount(params: {
   firstName: string;
   lastName: string;
+  phoneNumber: string;
   email: string;
   password: string;
 }): Promise<CustomerAuthSession> {
@@ -1468,6 +1469,9 @@ export async function signUpWithEmailAccount(params: {
   if (cleanLast.length < 2) {
     throw new Error('Please enter your last name (at least 2 characters).');
   }
+  if (!isValidKenyanPhone(params.phoneNumber)) {
+    throw new Error('Please enter a valid Kenyan phone number (e.g. 712 345 678).');
+  }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
     throw new Error('Please enter a valid email address.');
   }
@@ -1475,6 +1479,8 @@ export async function signUpWithEmailAccount(params: {
     throw new Error('Password must be at least 6 characters.');
   }
 
+  const cleanPhone = normalizeKenyanPhone(params.phoneNumber);
+  const e164Phone = toE164KenyanPhone(params.phoneNumber);
   const fullName = `${cleanFirst} ${cleanLast}`;
 
   // 1. Try real Supabase Auth signUp if configured
@@ -1488,6 +1494,7 @@ export async function signUpWithEmailAccount(params: {
             full_name: fullName,
             first_name: cleanFirst,
             last_name: cleanLast,
+            phone_number: cleanPhone,
             role: 'customer',
           },
         },
@@ -1503,7 +1510,7 @@ export async function signUpWithEmailAccount(params: {
           id: user.id,
           role: 'customer',
           full_name: fullName,
-          phone_number: '',
+          phone_number: cleanPhone,
           email: cleanEmail,
           is_verified: true,
           updated_at: new Date().toISOString(),
@@ -1514,7 +1521,7 @@ export async function signUpWithEmailAccount(params: {
             id: user.id,
             email: cleanEmail,
             fullName,
-            phoneNumber: '',
+            phoneNumber: cleanPhone,
             role: 'customer',
             createdAt: user.created_at || new Date().toISOString(),
           },
@@ -1522,7 +1529,7 @@ export async function signUpWithEmailAccount(params: {
             id: user.id,
             role: 'customer',
             fullName,
-            phoneNumber: '',
+            phoneNumber: cleanPhone,
             email: cleanEmail,
             isVerified: true,
             createdAt: user.created_at || new Date().toISOString(),
@@ -1534,7 +1541,7 @@ export async function signUpWithEmailAccount(params: {
         saveRegisteredCustomerAccount({
           id: user.id,
           email: cleanEmail,
-          phoneNumber: '',
+          phoneNumber: cleanPhone,
           fullName,
           password,
           createdAt: session.user.createdAt,
@@ -1563,6 +1570,7 @@ export async function signUpWithEmailAccount(params: {
       body: JSON.stringify({
         firstName: cleanFirst,
         lastName: cleanLast,
+        phoneNumber: e164Phone,
         email: cleanEmail,
         password,
       }),
@@ -1578,7 +1586,7 @@ export async function signUpWithEmailAccount(params: {
         id: cust.id,
         email: cust.email,
         fullName: cust.fullName,
-        phoneNumber: cust.phoneNumber || '',
+        phoneNumber: cust.phoneNumber || cleanPhone,
         role: 'customer',
         createdAt: cust.createdAt,
       },
@@ -1586,7 +1594,7 @@ export async function signUpWithEmailAccount(params: {
         id: cust.id,
         role: 'customer',
         fullName: cust.fullName,
-        phoneNumber: cust.phoneNumber || '',
+        phoneNumber: cust.phoneNumber || cleanPhone,
         email: cust.email,
         isVerified: true,
         createdAt: cust.createdAt,
@@ -1596,7 +1604,7 @@ export async function signUpWithEmailAccount(params: {
     saveRegisteredCustomerAccount({
       id: cust.id,
       email: cust.email,
-      phoneNumber: cust.phoneNumber || '',
+      phoneNumber: cust.phoneNumber || cleanPhone,
       fullName: cust.fullName,
       password,
       createdAt: cust.createdAt,
@@ -1606,9 +1614,13 @@ export async function signUpWithEmailAccount(params: {
   }
 
   // Node/test fallback
-  const existingLocal = findRegisteredCustomerAccount(cleanEmail);
-  if (existingLocal) {
+  const existingEmail = findRegisteredCustomerAccount(cleanEmail);
+  if (existingEmail) {
     throw new Error('An account with this email already exists. Please log in instead.');
+  }
+  const existingPhone = findRegisteredCustomerAccount(cleanPhone);
+  if (existingPhone) {
+    throw new Error('An account with this phone number already exists. Please log in instead.');
   }
 
   const newId = `cust-${Date.now()}`;
@@ -1617,7 +1629,7 @@ export async function signUpWithEmailAccount(params: {
       id: newId,
       email: cleanEmail,
       fullName,
-      phoneNumber: '',
+      phoneNumber: cleanPhone,
       role: 'customer',
       createdAt: new Date().toISOString(),
     },
@@ -1625,7 +1637,7 @@ export async function signUpWithEmailAccount(params: {
       id: newId,
       role: 'customer',
       fullName,
-      phoneNumber: '',
+      phoneNumber: cleanPhone,
       email: cleanEmail,
       isVerified: true,
       createdAt: new Date().toISOString(),
@@ -1635,7 +1647,7 @@ export async function signUpWithEmailAccount(params: {
   saveRegisteredCustomerAccount({
     id: newId,
     email: cleanEmail,
-    phoneNumber: '',
+    phoneNumber: cleanPhone,
     fullName,
     password,
     createdAt: session.user.createdAt,

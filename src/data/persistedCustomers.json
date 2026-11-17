@@ -31,5 +31,17 @@
     "isVerified": true,
     "createdAt": "2026-11-17T15:02:43.036Z",
     "updatedAt": "2026-11-17T15:02:43.036Z"
+  },
+  {
+    "id": "cust-de87c4a0-2ad1-45cf-9d59-b9852f203d51",
+    "fullName": "Faith Mutua",
+    "phoneNumber": "+254 754 928 751",
+    "e164Phone": "+254754928751",
+    "email": "phone.signup.1794928751@oohgas.ke",
+    "passwordHash": "b9551de7a9f115c4cb7bc59ebc9a083881778a9e7489f16f11022b886953db22",
+    "role": "customer",
+    "isVerified": true,
+    "createdAt": "2026-11-17T15:19:11.660Z",
+    "updatedAt": "2026-11-17T15:19:11.660Z"
   }
 ]

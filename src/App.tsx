@@ -4,10 +4,11 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { NavigationDrawer, DrawerDestination } from './components/NavigationDrawer';
 import { MapboxDeliveryMap } from './components/map/MapboxDeliveryMap';
 import {
-  NearbyShopsBottomSheet,
   ShopDetailSheetModal,
   RiderDetailSheetModal,
 } from './components/ondemand/NearbyShopsBottomSheet';
+import { DestinationHomeScreen } from './components/ondemand/DestinationHomeScreen';
+import { DestinationMapStep } from './components/ondemand/DestinationMapStep';
 import {
   OrderGasFlow,
   OrderFlowStep,
@@ -180,9 +181,9 @@ export default function App() {
   // Active Order State
   const [activeOrder, setActiveOrder] = useState<OnDemandOrderState | null>(null);
 
-  // Home Screen Map Hero & Draggable Bottom Sheet State
-  const [homeSearchQuery, setHomeSearchQuery] = useState('');
-  const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
+  // Destination-First Home Flow State (Step 1: Destination Search -> Step 2: Interactive Map Pin)
+  const [homeStep, setHomeStep] = useState<'destination' | 'map_pin'>('destination');
+  const [autoDetectGpsInMap, setAutoDetectGpsInMap] = useState<boolean>(false);
   const [selectedShopPinModal, setSelectedShopPinModal] = useState<Supplier | null>(null);
   const [selectedRiderPinModal, setSelectedRiderPinModal] = useState<RiderInfo | null>(null);
   const [flowInitialSupplier, setFlowInitialSupplier] = useState<Supplier | null>(null);
@@ -745,6 +746,8 @@ export default function App() {
       setAuthRedirectDestination(null);
     } else {
       setActiveTab('home');
+      setOrderFlowStep(null);
+      setHomeStep('destination');
     }
   };
 
@@ -840,7 +843,11 @@ export default function App() {
     authPage === null &&
     activeTab === 'home' &&
     orderFlowStep === null &&
+    homeStep === 'map_pin' &&
     !(isLiveTrackerOpen && activeOrder);
+
+  const shouldHideMobileBottomNav =
+    isHomeMapView || orderFlowStep !== null || (isLiveTrackerOpen && Boolean(activeOrder));
 
   const testViewports = [
     { label: '320px', width: 320, icon: Smartphone, desc: 'Small Phone' },
@@ -1009,6 +1016,7 @@ export default function App() {
             setAuthPage(null);
             setOrderFlowStep(null);
             setIsLiveTrackerOpen(false);
+            setHomeStep('destination');
             setActiveTab('home');
           }}
           activeTab={activeTab}
@@ -1107,6 +1115,11 @@ export default function App() {
                   onToggleFavoriteSupplier={handleToggleFavoriteSupplier}
                   customerSession={customerSession}
                   onOpenLocationModal={() => setIsLocationModalOpen(true)}
+                  onChangeDestinationOnMap={() => {
+                    setOrderFlowStep(null);
+                    setAutoDetectGpsInMap(false);
+                    setHomeStep('map_pin');
+                  }}
                   onSelectLocation={(newLocation) => setCurrentLocation(newLocation)}
                   onRequestAuthForCheckout={(stepToReturnTo) => {
                     setPendingOrderFlowStep(stepToReturnTo);
@@ -1120,88 +1133,63 @@ export default function App() {
                   onTrackPlacedOrder={() => {
                     setOrderFlowStep(null);
                     setFlowInitialSupplier(null);
+                    setHomeStep('destination');
                     setIsLiveTrackerOpen(true);
                   }}
                   onCancelFlow={() => {
                     setOrderFlowStep(null);
                     setFlowInitialSupplier(null);
+                    setHomeStep('destination');
                     setActiveTab('home');
                   }}
                 />
+              ) : homeStep === 'map_pin' ? (
+                /* STEP 2: INTERACTIVE DESTINATION MAP & PIN CONFIRMATION */
+                <DestinationMapStep
+                  initialLocation={currentLocation}
+                  autoDetectGpsOnMount={autoDetectGpsInMap}
+                  customerId={customerSession?.user.id}
+                  suppliers={MOCK_SUPPLIERS}
+                  riders={MOCK_RIDERS}
+                  zones={deliveryZones}
+                  onZonesUpdated={refreshZonesAndCoverage}
+                  onBack={() => {
+                    setAutoDetectGpsInMap(false);
+                    setHomeStep('destination');
+                  }}
+                  onConfirmLocation={(confirmedLoc, confirmedCoverage) => {
+                    setCurrentLocation(confirmedLoc);
+                    if (confirmedCoverage) {
+                      setCoverageResult(confirmedCoverage);
+                    }
+                    setAutoDetectGpsInMap(false);
+                    setFlowInitialSupplier(null);
+                    setOrderFlowTiming('asap');
+                    setOrderFlowStep('select_gas');
+                  }}
+                />
               ) : (
-                /* SCREEN 3: MAP-FIRST UBER-INSPIRED HOME SCREEN */
-                <main className="pb-[76px] md:pb-10">
-                  {/* Active Order Tracking Banner */}
-                  {activeOrder && activeOrder.stage !== 'completed' && (
-                    <div className="mx-3 mt-2 lg:mx-0 lg:mt-0 mb-3 bg-[#226946] text-white rounded-2xl p-3.5 sm:p-4 flex items-center justify-between gap-3 shadow-sm">
-                      <div className="min-w-0">
-                        <p className="text-xs sm:text-sm font-extrabold truncate">
-                          Active order #{activeOrder.orderId}: {activeOrder.quantity}x{' '}
-                          {activeOrder.cylinderSize}
-                        </p>
-                        <p className="text-[11px] text-emerald-100 truncate">
-                          {activeOrder.matchedSupplier?.name || 'Verified Gas Shop'} · Rider{' '}
-                          {activeOrder.assignedRider?.name.split(' ')[0]} (~
-                          {activeOrder.etaMinutes} min)
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsLiveTrackerOpen(true)}
-                        className="py-2 px-4 rounded-xl bg-white text-[#226946] font-bold text-xs hover:bg-emerald-50 cursor-pointer shrink-0 transition-colors"
-                      >
-                        Track Order →
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Mobile 66dvh Full-Bleed Map Hero + Draggable Bottom Sheet / Desktop 2-Column Layout */}
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-0 lg:gap-6 items-start">
-                    <div className="lg:col-span-7">
-                      <MapboxDeliveryMap
-                        isHomeHero={true}
-                        currentLocation={currentLocation}
-                        suppliers={MOCK_SUPPLIERS}
-                        riders={MOCK_RIDERS}
-                        activeOrder={null}
-                        coverageResult={coverageResult}
-                        isCoverageLoading={isCoverageLoading}
-                        zones={deliveryZones}
-                        onZonesUpdated={refreshZonesAndCoverage}
-                        onOpenLocationModal={() => setIsLocationModalOpen(true)}
-                        onSelectLocation={(newLocation) => setCurrentLocation(newLocation)}
-                        onSelectSupplierPin={(sup) => setSelectedShopPinModal(sup)}
-                        onSelectRiderPin={(rider) => setSelectedRiderPinModal(rider)}
-                        searchValue={homeSearchQuery}
-                        onSearchValueChange={setHomeSearchQuery}
-                        heightClassName="h-[66dvh] min-h-[430px] lg:h-[600px]"
-                      />
-                    </div>
-
-                    <div className="lg:col-span-5 -mt-7 lg:mt-0 relative z-20 lg:sticky lg:top-20">
-                      <NearbyShopsBottomSheet
-                        suppliers={MOCK_SUPPLIERS}
-                        selectedSize={selectedSize}
-                        onChangeSize={setSelectedSize}
-                        purchaseType={purchaseType}
-                        onChangePurchaseType={setPurchaseType}
-                        searchQuery={homeSearchQuery}
-                        coverageResult={coverageResult}
-                        favoriteSupplierIds={favoriteSupplierIds}
-                        onToggleFavoriteSupplier={handleToggleFavoriteSupplier}
-                        onSelectShop={(shop) => setSelectedShopPinModal(shop)}
-                        onOrderGasNow={(preferredShop) => {
-                          setFlowInitialSupplier(preferredShop || null);
-                          setOrderFlowTiming('asap');
-                          setOrderFlowStep('select_gas');
-                        }}
-                        isExpanded={isBottomSheetExpanded}
-                        onToggleExpand={setIsBottomSheetExpanded}
-                      />
-                    </div>
-                  </div>
-                </main>
+                /* STEP 1: CLEAN DESTINATION-FIRST HOME SCREEN */
+                <DestinationHomeScreen
+                  customerSession={customerSession}
+                  activeOrder={activeOrder}
+                  onOpenMapSearch={(options) => {
+                    setAutoDetectGpsInMap(Boolean(options?.autoDetectGps));
+                    setHomeStep('map_pin');
+                  }}
+                  onSelectLocationForMapConfirm={(loc) => {
+                    setCurrentLocation(loc);
+                    setAutoDetectGpsInMap(false);
+                    setHomeStep('map_pin');
+                  }}
+                  onOpenProfile={() => {
+                    setAuthPage(null);
+                    setOrderFlowStep(null);
+                    setActiveTab('profile');
+                  }}
+                  onOpenAuth={(mode) => handleOpenAuthPage(mode || 'login')}
+                  onTrackActiveOrder={() => setIsLiveTrackerOpen(true)}
+                />
               )}
             </>
           )}
@@ -1326,17 +1314,20 @@ export default function App() {
         </div>
 
         {/* Mobile Bottom Navigation Bar: Home, Orders, Notifications, Profile */}
-        <BottomNav
-          activeTab={activeTab}
-          unreadNotifications={unreadCount}
-          onChangeTab={(tab) => {
-            setAuthPage(null);
-            setOrderFlowStep(null);
-            setIsLiveTrackerOpen(false);
-            if (tab === 'orders') setOrdersInitialFilter('all');
-            setActiveTab(tab);
-          }}
-        />
+        {!shouldHideMobileBottomNav && (
+          <BottomNav
+            activeTab={activeTab}
+            unreadNotifications={unreadCount}
+            onChangeTab={(tab) => {
+              setAuthPage(null);
+              setOrderFlowStep(null);
+              setIsLiveTrackerOpen(false);
+              if (tab === 'home') setHomeStep('destination');
+              if (tab === 'orders') setOrdersInitialFilter('all');
+              setActiveTab(tab);
+            }}
+          />
+        )}
       </div>
 
       {/* Interactive Modals */}

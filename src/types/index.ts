@@ -10,6 +10,7 @@ export interface CylinderPriceItem {
   refillPrice: number; // in KSh
   completePrice: number; // in KSh
   popular?: boolean;
+  inStock?: boolean;
 }
 
 export interface Supplier {

@@ -4,10 +4,12 @@ import signupHeroImg from '../../assets/images/oohgas_signup_hero_1794927505943.
 import {
   CustomerAuthSession,
   OtpRequestResult,
+  isValidKenyanPhone,
   signUpWithEmailAccount,
   signInWithGoogleCustomer,
 } from '../../services/customerAuthService';
 import { NairobiLocation } from '../../types';
+import { KenyaFlagBadge } from './PhoneAuthFlow';
 import {
   AlertCircle,
   ArrowRight,
@@ -35,6 +37,7 @@ interface SignUpPageProps {
 interface FieldErrors {
   firstName?: string;
   lastName?: string;
+  phoneNumber?: string;
   email?: string;
   password?: string;
 }
@@ -68,6 +71,7 @@ export const SignUpPage: React.FC<SignUpPageProps> = ({
 }) => {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -94,6 +98,9 @@ export const SignUpPage: React.FC<SignUpPageProps> = ({
     if (lastName.trim().length < 2) {
       errors.lastName = 'Enter your last name (at least 2 characters).';
     }
+    if (!isValidKenyanPhone(phoneNumber)) {
+      errors.phoneNumber = 'Enter a valid Kenyan phone number (e.g. 712 345 678).';
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       errors.email = 'Enter a valid email address.';
     }
@@ -118,6 +125,7 @@ export const SignUpPage: React.FC<SignUpPageProps> = ({
       const session = await signUpWithEmailAccount({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        phoneNumber: phoneNumber.trim(),
         email: email.trim().toLowerCase(),
         password,
       });
@@ -396,6 +404,43 @@ export const SignUpPage: React.FC<SignUpPageProps> = ({
                   {fieldErrors.lastName && (
                     <p className="text-[11px] font-medium text-rose-600 mt-1 pl-4">
                       {fieldErrors.lastName}
+                    </p>
+                  )}
+                </div>
+
+                {/* Kenyan Phone Number (+254) */}
+                <div>
+                  <div
+                    className={`flex items-center rounded-full bg-[#F3F5F7] border transition-all overflow-hidden ${
+                      fieldErrors.phoneNumber
+                        ? 'border-rose-400 bg-rose-50/40'
+                        : 'border-transparent focus-within:border-[#0E8A45] focus-within:bg-white'
+                    }`}
+                  >
+                    <div className="pl-4 pr-3 py-3 border-r border-neutral-200/90 flex items-center shrink-0">
+                      <KenyaFlagBadge className="tabular-nums" />
+                    </div>
+                    <input
+                      type="tel"
+                      name="phoneNumber"
+                      inputMode="tel"
+                      autoComplete="tel-national"
+                      required
+                      value={phoneNumber}
+                      onChange={(e) => {
+                        setPhoneNumber(e.target.value);
+                        if (fieldErrors.phoneNumber) {
+                          setFieldErrors((prev) => ({ ...prev, phoneNumber: undefined }));
+                        }
+                      }}
+                      placeholder="Phone Number (e.g. 712 345 678)"
+                      aria-label="Phone Number"
+                      className="w-full min-h-[50px] px-3.5 bg-transparent text-[14.5px] font-medium text-[#15191C] placeholder:text-[#6B7280] outline-hidden tabular-nums"
+                    />
+                  </div>
+                  {fieldErrors.phoneNumber && (
+                    <p className="text-[11px] font-medium text-rose-600 mt-1 pl-4">
+                      {fieldErrors.phoneNumber}
                     </p>
                   )}
                 </div>

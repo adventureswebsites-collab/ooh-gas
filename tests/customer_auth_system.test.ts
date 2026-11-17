@@ -287,27 +287,34 @@ async function runAuthTests() {
   assert(otpVerifyReturn.session?.user.id === registeredOtpSession.user.id, 'Preserves persistent customer user ID');
 
   // --------------------------------------------------------------------------
-  // TEST 15: Email & First/Last Name Registration (New SignUp Page Flow)
+  // TEST 15: Registration with First/Last Name, Kenyan Phone (+254), Email & Password
   // --------------------------------------------------------------------------
-  console.log('\n--- Test 15: Email + First/Last Name Registration Flow ---');
+  console.log('\n--- Test 15: Create Account with Phone Number, Email & Password ---');
   await signOutCustomer();
   const signupEmail = `faith.mutua.${Date.now()}@oohgas.ke`;
+  const signupPhone = `074${String(Date.now()).slice(-7)}`;
   const emailSignupSession = await signUpWithEmailAccount({
     firstName: 'Faith',
     lastName: 'Mutua',
+    phoneNumber: signupPhone,
     email: signupEmail,
     password: 'StrongPassword99',
   });
   assert(Boolean(emailSignupSession.user.id), 'Email signup generates unique customer ID');
   assert(emailSignupSession.user.fullName === 'Faith Mutua', 'Combines firstName and lastName into fullName');
+  assert(
+    emailSignupSession.user.phoneNumber === normalizeKenyanPhone(signupPhone),
+    'Normalizes Kenyan phone number on account registration'
+  );
   assert(emailSignupSession.user.email === signupEmail.toLowerCase(), 'Normalizes registered email');
-  assert(isCustomerLoggedIn() === true, 'Customer logged in automatically after email registration');
+  assert(isCustomerLoggedIn() === true, 'Customer logged in automatically after registration');
 
-  // Verify duplicate email rejection & short field validation
+  // Verify duplicate email & invalid phone rejections
   try {
     await signUpWithEmailAccount({
       firstName: 'Faith',
       lastName: 'Mutua',
+      phoneNumber: '0744112233',
       email: signupEmail,
       password: 'AnotherPassword123',
     });
@@ -318,8 +325,22 @@ async function runAuthTests() {
 
   try {
     await signUpWithEmailAccount({
+      firstName: 'Faith',
+      lastName: 'Mutua',
+      phoneNumber: '123',
+      email: 'newemail@example.com',
+      password: 'validpassword',
+    });
+    assert(false, 'Should reject invalid Kenyan phone number');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('kenyan phone'), 'Validates Kenyan phone number on signup');
+  }
+
+  try {
+    await signUpWithEmailAccount({
       firstName: 'F',
       lastName: 'Mutua',
+      phoneNumber: '0744112233',
       email: 'valid@example.com',
       password: 'validpassword',
     });
@@ -327,6 +348,18 @@ async function runAuthTests() {
   } catch (err: any) {
     assert(err.message.toLowerCase().includes('first name'), 'Validates first name length');
   }
+
+  // Verify user created on Create Account page can immediately log in via Phone + Password
+  await signOutCustomer();
+  const reloginFromSignup = await signInWithPhonePassword({
+    phoneNumber: signupPhone,
+    password: 'StrongPassword99',
+    rememberMe: true,
+  });
+  assert(
+    reloginFromSignup.user.id === emailSignupSession.user.id,
+    'Newly created account logs straight in via Phone + Password Login page'
+  );
 
   // --------------------------------------------------------------------------
   // TEST 16: Google Account Customer Authentication
