@@ -1,0 +1,35 @@
+[
+  {
+    "id": "cust-wangari-mwangi-2026",
+    "fullName": "Wangari Mwangi",
+    "phoneNumber": "+254 712 345 678",
+    "e164Phone": "+254712345678",
+    "email": "wangari.mwangi@gmail.com",
+    "role": "customer",
+    "isVerified": true,
+    "createdAt": "2026-01-15T08:00:00Z",
+    "updatedAt": "2026-10-15T08:00:00Z"
+  },
+  {
+    "id": "cust-63152f62-dace-4a24-88bf-b942ec9df182",
+    "fullName": "Smoke Tester",
+    "phoneNumber": "",
+    "e164Phone": "",
+    "email": "smoke.1794927762@oohgas.ke",
+    "role": "customer",
+    "isVerified": true,
+    "createdAt": "2026-11-17T15:02:42.981Z",
+    "updatedAt": "2026-11-17T15:02:42.981Z"
+  },
+  {
+    "id": "cust-e492bed9-da8e-4228-806e-de60b636d6a1",
+    "fullName": "Smoke Google",
+    "phoneNumber": "",
+    "e164Phone": "",
+    "email": "smoke.google.1794927763@gmail.com",
+    "role": "customer",
+    "isVerified": true,
+    "createdAt": "2026-11-17T15:02:43.036Z",
+    "updatedAt": "2026-11-17T15:02:43.036Z"
+  }
+]

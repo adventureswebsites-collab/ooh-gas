@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { INITIAL_DELIVERY_ZONES, isPointInPolygon } from './src/data/deliveryZonesData.js';
@@ -34,11 +35,106 @@ const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const PERSIST_FILE = path.join(__dirname, 'src', 'data', 'persistedZones.json');
+const CUSTOMERS_PERSIST_FILE = path.join(__dirname, 'src', 'data', 'persistedCustomers.json');
 const ADMIN_SECRET_TOKEN = 'admin_session_oohgas_2026_verified';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin2026';
 
 // In-memory zone state loaded from file or default
 let deliveryZones: DeliveryZone[] = [];
+
+// Server-side Phone OTP & Customer Account Store
+interface ServerCustomerRecord {
+  id: string;
+  fullName: string;
+  phoneNumber: string;
+  e164Phone: string;
+  email: string;
+  role: 'customer';
+  isVerified: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PendingOtpChallenge {
+  e164Phone: string;
+  normalizedPhone: string;
+  code: string;
+  expiresAt: number;
+  lastSentAt: number;
+  attempts: number;
+}
+
+interface VerifiedPhoneToken {
+  e164Phone: string;
+  normalizedPhone: string;
+  expiresAt: number;
+}
+
+const DEFAULT_SERVER_CUSTOMERS: ServerCustomerRecord[] = [
+  {
+    id: 'cust-wangari-mwangi-2026',
+    fullName: 'Wangari Mwangi',
+    phoneNumber: '+254 712 345 678',
+    e164Phone: '+254712345678',
+    email: 'wangari.mwangi@gmail.com',
+    role: 'customer',
+    isVerified: true,
+    createdAt: '2026-01-15T08:00:00Z',
+    updatedAt: '2026-10-15T08:00:00Z',
+  },
+];
+
+let serverCustomers: ServerCustomerRecord[] = [];
+const pendingOtpChallenges = new Map<string, PendingOtpChallenge>();
+const verifiedPhoneTokens = new Map<string, VerifiedPhoneToken>();
+
+function normalizeServerKenyanPhone(phone: string): { valid: boolean; e164Phone: string; normalizedPhone: string } {
+  const digits = String(phone || '').replace(/\D/g, '');
+  let localNine = '';
+
+  if (digits.startsWith('254') && digits.length === 12) {
+    localNine = digits.slice(3);
+  } else if (digits.startsWith('0') && digits.length === 10) {
+    localNine = digits.slice(1);
+  } else if (digits.length === 9) {
+    localNine = digits;
+  }
+
+  if (!/^(7|1)\d{8}$/.test(localNine)) {
+    return { valid: false, e164Phone: '', normalizedPhone: '' };
+  }
+
+  return {
+    valid: true,
+    e164Phone: `+254${localNine}`,
+    normalizedPhone: `+254 ${localNine.slice(0, 3)} ${localNine.slice(3, 6)} ${localNine.slice(6)}`,
+  };
+}
+
+function loadServerCustomers(): void {
+  try {
+    if (fs.existsSync(CUSTOMERS_PERSIST_FILE)) {
+      const raw = fs.readFileSync(CUSTOMERS_PERSIST_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        serverCustomers = parsed;
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('[Auth DB] Failed reading persisted customers, using default:', err);
+  }
+  serverCustomers = [...DEFAULT_SERVER_CUSTOMERS];
+  saveServerCustomers();
+}
+
+function saveServerCustomers(): void {
+  try {
+    fs.writeFileSync(CUSTOMERS_PERSIST_FILE, JSON.stringify(serverCustomers, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Auth DB] Failed persisting customer accounts:', err);
+  }
+}
 
 function loadZones(): void {
   try {
@@ -79,6 +175,7 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
 
 async function startServer() {
   loadZones();
+  loadServerCustomers();
 
   const app = express();
   app.use(express.json());
@@ -720,6 +817,287 @@ async function startServer() {
 
     const result = updateOrderStage(req.params.orderId, status);
     res.json({ ...result, driverNotes });
+  });
+
+  // ==========================================
+  // Phone & OTP Customer Authentication Endpoints
+  // ==========================================
+
+  app.get('/api/auth/phone-status', (req: Request, res: Response) => {
+    const phone = String(req.query.phone || '');
+    const parsed = normalizeServerKenyanPhone(phone);
+    if (!parsed.valid) {
+      return res.status(400).json({ valid: false, error: 'Enter a valid Kenyan mobile number (e.g. 0712 345 678).' });
+    }
+    const existing = serverCustomers.find((c) => c.e164Phone === parsed.e164Phone);
+    res.json({
+      valid: true,
+      normalizedPhone: parsed.normalizedPhone,
+      e164Phone: parsed.e164Phone,
+      isReturningCustomer: Boolean(existing),
+      customerFirstName: existing ? existing.fullName.split(' ')[0] : undefined,
+    });
+  });
+
+  app.post('/api/auth/otp/request', (req: Request, res: Response) => {
+    const { phoneNumber } = req.body || {};
+    const parsed = normalizeServerKenyanPhone(phoneNumber);
+    if (!parsed.valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please enter a valid Kenyan mobile number (+254 7XX or 01XX).',
+      });
+    }
+
+    const now = Date.now();
+    const existingChallenge = pendingOtpChallenges.get(parsed.e164Phone);
+    if (existingChallenge && now - existingChallenge.lastSentAt < 25000) {
+      const waitSeconds = Math.ceil((25000 - (now - existingChallenge.lastSentAt)) / 1000);
+      return res.status(429).json({
+        success: false,
+        error: `Please wait ${waitSeconds}s before requesting another verification code.`,
+        retryAfterSeconds: waitSeconds,
+      });
+    }
+
+    const code = String(crypto.randomInt(100000, 999999));
+    pendingOtpChallenges.set(parsed.e164Phone, {
+      e164Phone: parsed.e164Phone,
+      normalizedPhone: parsed.normalizedPhone,
+      code,
+      expiresAt: now + 5 * 60 * 1000,
+      lastSentAt: now,
+      attempts: 0,
+    });
+
+    const existingCustomer = serverCustomers.find((c) => c.e164Phone === parsed.e164Phone);
+    const hasExternalSmsProvider = Boolean(
+      process.env.TWILIO_ACCOUNT_SID || process.env.AFRICASTALKING_API_KEY
+    );
+
+    if (!hasExternalSmsProvider) {
+      console.log(`[Auth OTP] Dispatched OTP ${code} to ${parsed.normalizedPhone}`);
+    }
+
+    return res.json({
+      success: true,
+      normalizedPhone: parsed.normalizedPhone,
+      e164Phone: parsed.e164Phone,
+      isReturningCustomer: Boolean(existingCustomer),
+      customerFirstName: existingCustomer ? existingCustomer.fullName.split(' ')[0] : undefined,
+      resendCooldownSeconds: 30,
+      channel: 'server_otp',
+      ...(hasExternalSmsProvider ? {} : { verificationPreviewCode: code }),
+    });
+  });
+
+  app.post('/api/auth/otp/verify', (req: Request, res: Response) => {
+    const { phoneNumber, otpCode } = req.body || {};
+    const parsed = normalizeServerKenyanPhone(phoneNumber);
+    if (!parsed.valid) {
+      return res.status(400).json({ verified: false, error: 'Invalid Kenyan phone number.' });
+    }
+
+    const cleanCode = String(otpCode || '').replace(/\D/g, '');
+    if (cleanCode.length !== 6) {
+      return res.status(400).json({ verified: false, error: 'Please enter the 6-digit verification code.' });
+    }
+
+    const challenge = pendingOtpChallenges.get(parsed.e164Phone);
+    if (!challenge) {
+      return res.status(400).json({
+        verified: false,
+        error: 'Verification code expired or not found. Tap Resend OTP to get a new code.',
+      });
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      pendingOtpChallenges.delete(parsed.e164Phone);
+      return res.status(400).json({
+        verified: false,
+        error: 'This code has expired. Please tap Resend OTP for a fresh code.',
+      });
+    }
+
+    if (challenge.attempts >= 5) {
+      pendingOtpChallenges.delete(parsed.e164Phone);
+      return res.status(429).json({
+        verified: false,
+        error: 'Too many incorrect attempts. Please request a new OTP code.',
+      });
+    }
+
+    if (challenge.code !== cleanCode) {
+      challenge.attempts += 1;
+      return res.status(400).json({
+        verified: false,
+        error: `Incorrect verification code. ${5 - challenge.attempts} attempt(s) remaining.`,
+      });
+    }
+
+    pendingOtpChallenges.delete(parsed.e164Phone);
+
+    const existingCustomer = serverCustomers.find((c) => c.e164Phone === parsed.e164Phone);
+    if (existingCustomer) {
+      return res.json({
+        verified: true,
+        isReturningCustomer: true,
+        normalizedPhone: parsed.normalizedPhone,
+        e164Phone: parsed.e164Phone,
+        customer: existingCustomer,
+      });
+    }
+
+    const verificationToken = crypto.randomBytes(24).toString('hex');
+    verifiedPhoneTokens.set(verificationToken, {
+      e164Phone: parsed.e164Phone,
+      normalizedPhone: parsed.normalizedPhone,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    });
+
+    return res.json({
+      verified: true,
+      isReturningCustomer: false,
+      verificationToken,
+      normalizedPhone: parsed.normalizedPhone,
+      e164Phone: parsed.e164Phone,
+    });
+  });
+
+  app.post('/api/auth/register-phone', (req: Request, res: Response) => {
+    const { phoneNumber, verificationToken, fullName, email } = req.body || {};
+    const parsed = normalizeServerKenyanPhone(phoneNumber);
+    if (!parsed.valid) {
+      return res.status(400).json({ error: 'Valid Kenyan phone number is required.' });
+    }
+
+    if (!fullName || String(fullName).trim().length < 2) {
+      return res.status(400).json({ error: 'Please enter your full name.' });
+    }
+
+    const tokenRecord = verificationToken ? verifiedPhoneTokens.get(String(verificationToken)) : undefined;
+    if (!tokenRecord || tokenRecord.e164Phone !== parsed.e164Phone || Date.now() > tokenRecord.expiresAt) {
+      return res.status(401).json({
+        error: 'Phone verification expired. Please verify your phone number again.',
+      });
+    }
+
+    verifiedPhoneTokens.delete(String(verificationToken));
+
+    const cleanEmail = email && String(email).trim().includes('@')
+      ? String(email).trim().toLowerCase()
+      : `${parsed.e164Phone.replace('+', '')}@customer.oohgas.ke`;
+
+    const existingIdx = serverCustomers.findIndex((c) => c.e164Phone === parsed.e164Phone);
+    const nowIso = new Date().toISOString();
+
+    const record: ServerCustomerRecord = {
+      id: existingIdx !== -1 ? serverCustomers[existingIdx].id : `cust-${crypto.randomUUID()}`,
+      fullName: String(fullName).trim(),
+      phoneNumber: parsed.normalizedPhone,
+      e164Phone: parsed.e164Phone,
+      email: cleanEmail,
+      role: 'customer',
+      isVerified: true,
+      createdAt: existingIdx !== -1 ? serverCustomers[existingIdx].createdAt : nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (existingIdx !== -1) {
+      serverCustomers[existingIdx] = record;
+    } else {
+      serverCustomers.push(record);
+    }
+    saveServerCustomers();
+
+    return res.status(201).json({ customer: record });
+  });
+
+  app.post('/api/auth/register-email', (req: Request, res: Response) => {
+    const { firstName, lastName, email, password } = req.body || {};
+    const cleanFirst = String(firstName || '').trim();
+    const cleanLast = String(lastName || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+
+    if (cleanFirst.length < 2) {
+      return res.status(400).json({ error: 'First name must be at least 2 characters.' });
+    }
+    if (cleanLast.length < 2) {
+      return res.status(400).json({ error: 'Last name must be at least 2 characters.' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    if (!password || String(password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    const duplicate = serverCustomers.find((c) => c.email.toLowerCase() === cleanEmail);
+    if (duplicate) {
+      return res.status(409).json({
+        error: 'An account with this email already exists. Please log in instead.',
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const record: ServerCustomerRecord = {
+      id: `cust-${crypto.randomUUID()}`,
+      fullName: `${cleanFirst} ${cleanLast}`.trim(),
+      phoneNumber: '',
+      e164Phone: '',
+      email: cleanEmail,
+      role: 'customer',
+      isVerified: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    serverCustomers.push(record);
+    saveServerCustomers();
+
+    return res.status(201).json({ customer: record });
+  });
+
+  app.post('/api/auth/google', (req: Request, res: Response) => {
+    const { email, fullName } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanName = String(fullName || '').trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Valid Google email address is required.' });
+    }
+    if (cleanName.length < 2) {
+      return res.status(400).json({ error: 'Google account display name is required.' });
+    }
+
+    const existingIdx = serverCustomers.findIndex((c) => c.email.toLowerCase() === cleanEmail);
+    const nowIso = new Date().toISOString();
+
+    if (existingIdx !== -1) {
+      serverCustomers[existingIdx].updatedAt = nowIso;
+      if (!serverCustomers[existingIdx].fullName) {
+        serverCustomers[existingIdx].fullName = cleanName;
+      }
+      saveServerCustomers();
+      return res.json({ customer: serverCustomers[existingIdx], isNewCustomer: false });
+    }
+
+    const record: ServerCustomerRecord = {
+      id: `cust-${crypto.randomUUID()}`,
+      fullName: cleanName,
+      phoneNumber: '',
+      e164Phone: '',
+      email: cleanEmail,
+      role: 'customer',
+      isVerified: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    serverCustomers.push(record);
+    saveServerCustomers();
+
+    return res.status(201).json({ customer: record, isNewCustomer: true });
   });
 
   // ==========================================

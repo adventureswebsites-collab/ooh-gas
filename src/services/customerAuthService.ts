@@ -201,6 +201,35 @@ export function normalizeKenyanPhone(phone: string): string {
   return phone.trim();
 }
 
+export function isValidKenyanPhone(phone: string): boolean {
+  const digits = phone.replace(/\D/g, '');
+  let localNine = '';
+  if (digits.startsWith('254') && digits.length === 12) {
+    localNine = digits.slice(3);
+  } else if (digits.startsWith('0') && digits.length === 10) {
+    localNine = digits.slice(1);
+  } else if (digits.length === 9) {
+    localNine = digits;
+  }
+  return /^(7|1)\d{8}$/.test(localNine);
+}
+
+export function toE164KenyanPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  let localNine = '';
+  if (digits.startsWith('254') && digits.length === 12) {
+    localNine = digits.slice(3);
+  } else if (digits.startsWith('0') && digits.length === 10) {
+    localNine = digits.slice(1);
+  } else if (digits.length === 9) {
+    localNine = digits;
+  }
+  if (!/^(7|1)\d{8}$/.test(localNine)) {
+    throw new Error('Please enter a valid Kenyan phone number (e.g. 712 345 678).');
+  }
+  return `+254${localNine}`;
+}
+
 /**
  * Retrieves the currently signed-in customer session
  */
@@ -945,3 +974,785 @@ export async function getCustomerOrderHistory(customerId?: string): Promise<Mult
 
   return [];
 }
+
+/**
+ * 9. Phone & OTP Authentication (Supabase SMS OTP + Authoritative Backend OTP)
+ */
+export interface OtpRequestResult {
+  normalizedPhone: string;
+  e164Phone: string;
+  isReturningCustomer: boolean;
+  customerFirstName?: string;
+  resendCooldownSeconds: number;
+  channel: 'supabase_sms' | 'server_otp';
+  verificationPreviewCode?: string;
+}
+
+export interface OtpVerifyResult {
+  verified: boolean;
+  isReturningCustomer: boolean;
+  normalizedPhone: string;
+  session?: CustomerAuthSession;
+  verificationToken?: string;
+}
+
+const inMemoryTestOtps = new Map<string, { code: string; expiresAt: number }>();
+
+export async function requestPhoneOtp(phoneNumber: string): Promise<OtpRequestResult> {
+  if (!isValidKenyanPhone(phoneNumber)) {
+    throw new Error('Please enter a valid Kenyan mobile number starting with 7 or 1 (e.g. 712 345 678).');
+  }
+
+  const e164Phone = toE164KenyanPhone(phoneNumber);
+  const normalizedPhone = normalizeKenyanPhone(phoneNumber);
+
+  // Check Supabase returning customer profile first if available
+  let supabaseReturningName: string | undefined;
+  let supabaseReturningExists = false;
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, full_name, phone_number')
+        .or(`phone_number.eq.${normalizedPhone},phone_number.eq.${e164Phone}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingProfile?.full_name && existingProfile.full_name !== 'Ooh Gas Customer') {
+        supabaseReturningExists = true;
+        supabaseReturningName = existingProfile.full_name.split(' ')[0];
+      }
+
+      // Attempt genuine Supabase Phone OTP delivery
+      const { error: otpErr } = await supabase.auth.signInWithOtp({
+        phone: e164Phone,
+      });
+
+      if (!otpErr) {
+        return {
+          normalizedPhone,
+          e164Phone,
+          isReturningCustomer: supabaseReturningExists || Boolean(findRegisteredCustomerAccount(normalizedPhone)),
+          customerFirstName: supabaseReturningName || findRegisteredCustomerAccount(normalizedPhone)?.fullName.split(' ')[0],
+          resendCooldownSeconds: 30,
+          channel: 'supabase_sms',
+        };
+      }
+    } catch (err) {
+      console.warn('[CustomerAuth] Supabase Phone OTP fallback to backend SMS challenge:', err);
+    }
+  }
+
+  // Request authoritative OTP challenge from Express server (/api/auth/otp/request)
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/otp/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber: e164Phone }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Could not send verification code. Please try again.');
+    }
+
+    const localReg = findRegisteredCustomerAccount(normalizedPhone);
+    return {
+      normalizedPhone: data.normalizedPhone || normalizedPhone,
+      e164Phone: data.e164Phone || e164Phone,
+      isReturningCustomer: Boolean(data.isReturningCustomer || supabaseReturningExists || localReg),
+      customerFirstName: data.customerFirstName || supabaseReturningName || localReg?.fullName.split(' ')[0],
+      resendCooldownSeconds: data.resendCooldownSeconds ?? 30,
+      channel: 'server_otp',
+      verificationPreviewCode: data.verificationPreviewCode,
+    };
+  }
+
+  // Node/test environment fallback
+  const generatedCode = String(Math.floor(100000 + Math.random() * 900000));
+  inMemoryTestOtps.set(e164Phone, { code: generatedCode, expiresAt: Date.now() + 300000 });
+  const localReg = findRegisteredCustomerAccount(normalizedPhone);
+  return {
+    normalizedPhone,
+    e164Phone,
+    isReturningCustomer: Boolean(localReg),
+    customerFirstName: localReg?.fullName.split(' ')[0],
+    resendCooldownSeconds: 30,
+    channel: 'server_otp',
+    verificationPreviewCode: generatedCode,
+  };
+}
+
+export async function verifyPhoneOtp(params: {
+  phoneNumber: string;
+  otpCode: string;
+  channel?: 'supabase_sms' | 'server_otp';
+}): Promise<OtpVerifyResult> {
+  const { phoneNumber, otpCode, channel = 'server_otp' } = params;
+
+  if (!isValidKenyanPhone(phoneNumber)) {
+    throw new Error('Please enter a valid Kenyan mobile number.');
+  }
+
+  const e164Phone = toE164KenyanPhone(phoneNumber);
+  const normalizedPhone = normalizeKenyanPhone(phoneNumber);
+  const cleanCode = otpCode.replace(/\D/g, '');
+
+  if (cleanCode.length !== 6) {
+    throw new Error('Please enter the full 6-digit verification code.');
+  }
+
+  // 1. Supabase SMS OTP verification
+  if (channel === 'supabase_sms' && isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone: e164Phone,
+      token: cleanCode,
+      type: 'sms',
+    });
+
+    if (error || !data.user) {
+      throw new Error(error?.message || 'Invalid or expired verification code.');
+    }
+
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .maybeSingle();
+
+    const hasCompletedProfile =
+      Boolean(profileData?.full_name) && profileData.full_name !== 'Ooh Gas Customer';
+
+    if (hasCompletedProfile) {
+      const session: CustomerAuthSession = {
+        user: {
+          id: data.user.id,
+          email: profileData.email || data.user.email || `${e164Phone.replace('+', '')}@customer.oohgas.ke`,
+          fullName: profileData.full_name,
+          phoneNumber: profileData.phone_number || normalizedPhone,
+          role: 'customer',
+          createdAt: data.user.created_at || new Date().toISOString(),
+        },
+        profile: {
+          id: data.user.id,
+          role: 'customer',
+          fullName: profileData.full_name,
+          phoneNumber: profileData.phone_number || normalizedPhone,
+          email: profileData.email || data.user.email || '',
+          isVerified: true,
+          createdAt: data.user.created_at || new Date().toISOString(),
+          updatedAt: profileData.updated_at || new Date().toISOString(),
+        },
+        token: data.session?.access_token,
+      };
+      persistCustomerSession(session);
+      return {
+        verified: true,
+        isReturningCustomer: true,
+        normalizedPhone,
+        session,
+      };
+    }
+
+    return {
+      verified: true,
+      isReturningCustomer: false,
+      normalizedPhone,
+      verificationToken: data.session?.access_token || 'supabase_otp_verified',
+    };
+  }
+
+  // 2. Express backend OTP verification (/api/auth/otp/verify)
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber: e164Phone, otpCode: cleanCode }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.verified) {
+      throw new Error(data.error || 'Verification failed. Please check the code and try again.');
+    }
+
+    if (data.isReturningCustomer && data.customer) {
+      const cust = data.customer;
+      const session: CustomerAuthSession = {
+        user: {
+          id: cust.id,
+          email: cust.email || `${e164Phone.replace('+', '')}@customer.oohgas.ke`,
+          fullName: cust.fullName,
+          phoneNumber: cust.phoneNumber || normalizedPhone,
+          role: 'customer',
+          createdAt: cust.createdAt || new Date().toISOString(),
+        },
+        profile: {
+          id: cust.id,
+          role: 'customer',
+          fullName: cust.fullName,
+          phoneNumber: cust.phoneNumber || normalizedPhone,
+          email: cust.email || '',
+          isVerified: true,
+          createdAt: cust.createdAt || new Date().toISOString(),
+          updatedAt: cust.updatedAt || new Date().toISOString(),
+        },
+      };
+      persistCustomerSession(session);
+      return {
+        verified: true,
+        isReturningCustomer: true,
+        normalizedPhone,
+        session,
+      };
+    }
+
+    // Check if locally registered in browser storage
+    const localMatch = findRegisteredCustomerAccount(normalizedPhone);
+    if (localMatch) {
+      const session: CustomerAuthSession = {
+        user: {
+          id: localMatch.id,
+          email: localMatch.email,
+          fullName: localMatch.fullName,
+          phoneNumber: localMatch.phoneNumber,
+          role: 'customer',
+          createdAt: localMatch.createdAt,
+        },
+        profile: {
+          id: localMatch.id,
+          role: 'customer',
+          fullName: localMatch.fullName,
+          phoneNumber: localMatch.phoneNumber,
+          email: localMatch.email,
+          isVerified: true,
+          createdAt: localMatch.createdAt,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      persistCustomerSession(session);
+      return {
+        verified: true,
+        isReturningCustomer: true,
+        normalizedPhone,
+        session,
+      };
+    }
+
+    return {
+      verified: true,
+      isReturningCustomer: false,
+      normalizedPhone,
+      verificationToken: data.verificationToken,
+    };
+  }
+
+  // Node/test fallback
+  const challenge = inMemoryTestOtps.get(e164Phone);
+  if (!challenge || challenge.code !== cleanCode || Date.now() > challenge.expiresAt) {
+    throw new Error('Incorrect or expired verification code.');
+  }
+  inMemoryTestOtps.delete(e164Phone);
+
+  const localMatch = findRegisteredCustomerAccount(normalizedPhone);
+  if (localMatch) {
+    const session: CustomerAuthSession = {
+      user: {
+        id: localMatch.id,
+        email: localMatch.email,
+        fullName: localMatch.fullName,
+        phoneNumber: localMatch.phoneNumber,
+        role: 'customer',
+        createdAt: localMatch.createdAt,
+      },
+      profile: {
+        id: localMatch.id,
+        role: 'customer',
+        fullName: localMatch.fullName,
+        phoneNumber: localMatch.phoneNumber,
+        email: localMatch.email,
+        isVerified: true,
+        createdAt: localMatch.createdAt,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    persistCustomerSession(session);
+    return { verified: true, isReturningCustomer: true, normalizedPhone, session };
+  }
+
+  return {
+    verified: true,
+    isReturningCustomer: false,
+    normalizedPhone,
+    verificationToken: `test-token-${Date.now()}`,
+  };
+}
+
+export async function completePhoneRegistration(params: {
+  phoneNumber: string;
+  verificationToken: string;
+  fullName: string;
+  email?: string;
+}): Promise<CustomerAuthSession> {
+  const { phoneNumber, verificationToken, fullName, email } = params;
+
+  if (!fullName || fullName.trim().length < 2) {
+    throw new Error('Please enter your full name.');
+  }
+
+  if (email && email.trim() && !email.includes('@')) {
+    throw new Error('Please enter a valid email address.');
+  }
+
+  const e164Phone = toE164KenyanPhone(phoneNumber);
+  const normalizedPhone = normalizeKenyanPhone(phoneNumber);
+  const cleanName = fullName.trim();
+  const cleanEmail =
+    email && email.trim() ? email.trim().toLowerCase() : `${e164Phone.replace('+', '')}@customer.oohgas.ke`;
+
+  // Sync to Supabase if active OTP user session exists
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data: userRes } = await supabase.auth.getUser();
+      if (userRes?.user) {
+        const user = userRes.user;
+        await supabase.auth.updateUser({
+          data: {
+            full_name: cleanName,
+            phone_number: normalizedPhone,
+            role: 'customer',
+          },
+        });
+        await supabase.from('profiles').upsert({
+          id: user.id,
+          role: 'customer',
+          full_name: cleanName,
+          phone_number: normalizedPhone,
+          email: cleanEmail,
+          is_verified: true,
+          updated_at: new Date().toISOString(),
+        });
+
+        const sbSession: CustomerAuthSession = {
+          user: {
+            id: user.id,
+            email: cleanEmail,
+            fullName: cleanName,
+            phoneNumber: normalizedPhone,
+            role: 'customer',
+            createdAt: user.created_at || new Date().toISOString(),
+          },
+          profile: {
+            id: user.id,
+            role: 'customer',
+            fullName: cleanName,
+            phoneNumber: normalizedPhone,
+            email: cleanEmail,
+            isVerified: true,
+            createdAt: user.created_at || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        };
+        saveRegisteredCustomerAccount({
+          id: user.id,
+          email: cleanEmail,
+          phoneNumber: normalizedPhone,
+          fullName: cleanName,
+          createdAt: sbSession.user.createdAt,
+        });
+        persistCustomerSession(sbSession);
+        return sbSession;
+      }
+    } catch (err) {
+      console.warn('[CustomerAuth] Supabase registration profile upsert warning:', err);
+    }
+  }
+
+  // Persist customer profile via server API
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/register-phone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phoneNumber: e164Phone,
+        verificationToken,
+        fullName: cleanName,
+        email: cleanEmail,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.customer) {
+      throw new Error(data.error || 'Could not complete registration. Please try again.');
+    }
+
+    const cust = data.customer;
+    const session: CustomerAuthSession = {
+      user: {
+        id: cust.id,
+        email: cust.email,
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber,
+        role: 'customer',
+        createdAt: cust.createdAt,
+      },
+      profile: {
+        id: cust.id,
+        role: 'customer',
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber,
+        email: cust.email,
+        isVerified: true,
+        createdAt: cust.createdAt,
+        updatedAt: cust.updatedAt,
+      },
+    };
+    saveRegisteredCustomerAccount({
+      id: cust.id,
+      email: cust.email,
+      phoneNumber: cust.phoneNumber,
+      fullName: cust.fullName,
+      createdAt: cust.createdAt,
+    });
+    persistCustomerSession(session);
+    return session;
+  }
+
+  // Node/test fallback
+  const newId = `cust-${Date.now()}`;
+  const session: CustomerAuthSession = {
+    user: {
+      id: newId,
+      email: cleanEmail,
+      fullName: cleanName,
+      phoneNumber: normalizedPhone,
+      role: 'customer',
+      createdAt: new Date().toISOString(),
+    },
+    profile: {
+      id: newId,
+      role: 'customer',
+      fullName: cleanName,
+      phoneNumber: normalizedPhone,
+      email: cleanEmail,
+      isVerified: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  saveRegisteredCustomerAccount({
+    id: newId,
+    email: cleanEmail,
+    phoneNumber: normalizedPhone,
+    fullName: cleanName,
+    createdAt: session.user.createdAt,
+  });
+  persistCustomerSession(session);
+  return session;
+}
+
+/**
+ * 10. Email + First/Last Name Registration & Google OAuth Sign-Up
+ */
+export async function signUpWithEmailAccount(params: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+}): Promise<CustomerAuthSession> {
+  const cleanFirst = params.firstName.trim();
+  const cleanLast = params.lastName.trim();
+  const cleanEmail = params.email.trim().toLowerCase();
+  const password = params.password;
+
+  if (cleanFirst.length < 2) {
+    throw new Error('Please enter your first name (at least 2 characters).');
+  }
+  if (cleanLast.length < 2) {
+    throw new Error('Please enter your last name (at least 2 characters).');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
+  const fullName = `${cleanFirst} ${cleanLast}`;
+
+  // 1. Try real Supabase Auth signUp if configured
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+            first_name: cleanFirst,
+            last_name: cleanLast,
+            role: 'customer',
+          },
+        },
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const user = data.user;
+      if (user) {
+        await supabase.from('profiles').upsert({
+          id: user.id,
+          role: 'customer',
+          full_name: fullName,
+          phone_number: '',
+          email: cleanEmail,
+          is_verified: true,
+          updated_at: new Date().toISOString(),
+        });
+
+        const session: CustomerAuthSession = {
+          user: {
+            id: user.id,
+            email: cleanEmail,
+            fullName,
+            phoneNumber: '',
+            role: 'customer',
+            createdAt: user.created_at || new Date().toISOString(),
+          },
+          profile: {
+            id: user.id,
+            role: 'customer',
+            fullName,
+            phoneNumber: '',
+            email: cleanEmail,
+            isVerified: true,
+            createdAt: user.created_at || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          token: data.session?.access_token,
+        };
+
+        saveRegisteredCustomerAccount({
+          id: user.id,
+          email: cleanEmail,
+          phoneNumber: '',
+          fullName,
+          password,
+          createdAt: session.user.createdAt,
+        });
+        persistCustomerSession(session);
+        return session;
+      }
+    } catch (e: any) {
+      console.warn('[CustomerAuth] Supabase email sign-up notice:', e);
+      if (
+        e.message &&
+        !e.message.toLowerCase().includes('fetch') &&
+        !e.message.toLowerCase().includes('network') &&
+        !e.message.toLowerCase().includes('rate limit')
+      ) {
+        throw e;
+      }
+    }
+  }
+
+  // 2. Express backend persistent customer registration (/api/auth/register-email)
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/register-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: cleanFirst,
+        lastName: cleanLast,
+        email: cleanEmail,
+        password,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.customer) {
+      throw new Error(data.error || 'Could not create your account. Please try again.');
+    }
+
+    const cust = data.customer;
+    const session: CustomerAuthSession = {
+      user: {
+        id: cust.id,
+        email: cust.email,
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || '',
+        role: 'customer',
+        createdAt: cust.createdAt,
+      },
+      profile: {
+        id: cust.id,
+        role: 'customer',
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || '',
+        email: cust.email,
+        isVerified: true,
+        createdAt: cust.createdAt,
+        updatedAt: cust.updatedAt,
+      },
+    };
+    saveRegisteredCustomerAccount({
+      id: cust.id,
+      email: cust.email,
+      phoneNumber: cust.phoneNumber || '',
+      fullName: cust.fullName,
+      password,
+      createdAt: cust.createdAt,
+    });
+    persistCustomerSession(session);
+    return session;
+  }
+
+  // Node/test fallback
+  const existingLocal = findRegisteredCustomerAccount(cleanEmail);
+  if (existingLocal) {
+    throw new Error('An account with this email already exists. Please log in instead.');
+  }
+
+  const newId = `cust-${Date.now()}`;
+  const session: CustomerAuthSession = {
+    user: {
+      id: newId,
+      email: cleanEmail,
+      fullName,
+      phoneNumber: '',
+      role: 'customer',
+      createdAt: new Date().toISOString(),
+    },
+    profile: {
+      id: newId,
+      role: 'customer',
+      fullName,
+      phoneNumber: '',
+      email: cleanEmail,
+      isVerified: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  saveRegisteredCustomerAccount({
+    id: newId,
+    email: cleanEmail,
+    phoneNumber: '',
+    fullName,
+    password,
+    createdAt: session.user.createdAt,
+  });
+  persistCustomerSession(session);
+  return session;
+}
+
+export async function signInWithGoogleCustomer(googleProfile?: {
+  email: string;
+  fullName: string;
+}): Promise<{ session?: CustomerAuthSession; oauthRedirectStarted?: boolean; requiresAccountSelection?: boolean }> {
+  // 1. If Supabase Auth is configured and user hasn't picked a fallback profile yet, attempt native Supabase Google OAuth
+  if (!googleProfile && isSupabaseConfigured && supabase && typeof window !== 'undefined') {
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}${window.location.pathname}`,
+          queryParams: { access_type: 'offline', prompt: 'select_account' },
+        },
+      });
+      if (!error && data?.url) {
+        return { oauthRedirectStarted: true };
+      }
+    } catch (e) {
+      console.warn('[CustomerAuth] Supabase Google OAuth unavailable in current environment:', e);
+    }
+  }
+
+  // If caller hasn't provided a verified Google profile yet (and Supabase Google OAuth is unconfigured), ask UI to show Google Sign-In confirmation
+  if (!googleProfile) {
+    return { requiresAccountSelection: true };
+  }
+
+  const cleanEmail = googleProfile.email.trim().toLowerCase();
+  const cleanName = googleProfile.fullName.trim();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    throw new Error('Please enter a valid Google email address.');
+  }
+  if (cleanName.length < 2) {
+    throw new Error('Please enter your Google account full name.');
+  }
+
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, fullName: cleanName }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.customer) {
+      throw new Error(data.error || 'Google authentication failed. Please try again.');
+    }
+
+    const cust = data.customer;
+    const session: CustomerAuthSession = {
+      user: {
+        id: cust.id,
+        email: cust.email,
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || '',
+        role: 'customer',
+        createdAt: cust.createdAt,
+      },
+      profile: {
+        id: cust.id,
+        role: 'customer',
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || '',
+        email: cust.email,
+        isVerified: true,
+        createdAt: cust.createdAt,
+        updatedAt: cust.updatedAt,
+      },
+    };
+    saveRegisteredCustomerAccount({
+      id: cust.id,
+      email: cust.email,
+      phoneNumber: cust.phoneNumber || '',
+      fullName: cust.fullName,
+      createdAt: cust.createdAt,
+    });
+    persistCustomerSession(session);
+    return { session };
+  }
+
+  const newId = `cust-google-${Date.now()}`;
+  const session: CustomerAuthSession = {
+    user: {
+      id: newId,
+      email: cleanEmail,
+      fullName: cleanName,
+      phoneNumber: '',
+      role: 'customer',
+      createdAt: new Date().toISOString(),
+    },
+    profile: {
+      id: newId,
+      role: 'customer',
+      fullName: cleanName,
+      phoneNumber: '',
+      email: cleanEmail,
+      isVerified: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  saveRegisteredCustomerAccount({
+    id: newId,
+    email: cleanEmail,
+    phoneNumber: '',
+    fullName: cleanName,
+    createdAt: session.user.createdAt,
+  });
+  persistCustomerSession(session);
+  return { session };
+}
+

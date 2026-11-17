@@ -19,6 +19,13 @@ import {
   saveCustomerAddress,
   getCustomerOrderHistory,
   normalizeKenyanPhone,
+  isValidKenyanPhone,
+  toE164KenyanPhone,
+  requestPhoneOtp,
+  verifyPhoneOtp,
+  completePhoneRegistration,
+  signUpWithEmailAccount,
+  signInWithGoogleCustomer,
   findRegisteredCustomerAccount,
   DEMO_CUSTOMER,
 } from '../src/services/customerAuthService';
@@ -223,8 +230,126 @@ async function runAuthTests() {
   const customerOrders = await getCustomerOrderHistory(demoSession.user.id);
   assert(Array.isArray(customerOrders), 'Customer orders returned as array');
 
+  // --------------------------------------------------------------------------
+  // TEST 12: Kenyan Phone (+254) Mobile Validation & E.164 Conversion
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 12: Kenyan +254 Validation & E.164 Formatting ---');
+  assert(isValidKenyanPhone('0712345678') === true, 'Accepts 07XX format');
+  assert(isValidKenyanPhone('712345678') === true, 'Accepts 7XX local format (with +254 prefix)');
+  assert(isValidKenyanPhone('+254711223344') === true, 'Accepts +254 E.164 format');
+  assert(isValidKenyanPhone('0112345678') === true, 'Accepts Safaricom/Airtel 011X prefix');
+  assert(isValidKenyanPhone('12345') === false, 'Rejects short invalid numbers');
+  assert(toE164KenyanPhone('712 345 678') === '+254712345678', 'Formats local 9 digits to +254 E.164');
+
+  // --------------------------------------------------------------------------
+  // TEST 13: New Customer Phone OTP Verification -> Account Registration
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 13: New Customer Phone OTP Verification & Registration ---');
+  await signOutCustomer();
+  const brandNewPhone = `79${String(Date.now()).slice(-7)}`;
+  const otpReqNew = await requestPhoneOtp(brandNewPhone);
+  assert(otpReqNew.isReturningCustomer === false, 'Detects unregistered phone as new customer');
+  assert(Boolean(otpReqNew.verificationPreviewCode?.length === 6), 'Generates valid 6-digit OTP challenge');
+
+  const otpVerifyNew = await verifyPhoneOtp({
+    phoneNumber: brandNewPhone,
+    otpCode: otpReqNew.verificationPreviewCode || '',
+    channel: otpReqNew.channel,
+  });
+  assert(otpVerifyNew.verified === true, 'OTP verified successfully for new customer');
+  assert(otpVerifyNew.isReturningCustomer === false, 'Routes new customer to account registration step');
+  assert(Boolean(otpVerifyNew.verificationToken), 'Issues verified phone registration token');
+
+  const registeredOtpSession = await completePhoneRegistration({
+    phoneNumber: brandNewPhone,
+    verificationToken: otpVerifyNew.verificationToken || '',
+    fullName: 'Amina Wanjiku',
+    email: 'amina.wanjiku@oohgas.ke',
+  });
+  assert(registeredOtpSession.user.fullName === 'Amina Wanjiku', 'Saves customer full name from post-OTP registration');
+  assert(isCustomerLoggedIn() === true, 'Customer logged in after completing OTP registration');
+
+  // --------------------------------------------------------------------------
+  // TEST 14: Returning Customer Phone OTP Login
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 14: Returning Customer Phone OTP Login ---');
+  await signOutCustomer();
+  const otpReqReturn = await requestPhoneOtp(brandNewPhone);
+  assert(otpReqReturn.isReturningCustomer === true, 'Recognizes returning registered phone number');
+  const otpVerifyReturn = await verifyPhoneOtp({
+    phoneNumber: brandNewPhone,
+    otpCode: otpReqReturn.verificationPreviewCode || '',
+    channel: otpReqReturn.channel,
+  });
+  assert(otpVerifyReturn.verified === true, 'Returning customer OTP verified');
+  assert(otpVerifyReturn.isReturningCustomer === true, 'Logs returning customer straight in without duplicate registration');
+  assert(otpVerifyReturn.session?.user.id === registeredOtpSession.user.id, 'Preserves persistent customer user ID');
+
+  // --------------------------------------------------------------------------
+  // TEST 15: Email & First/Last Name Registration (New SignUp Page Flow)
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 15: Email + First/Last Name Registration Flow ---');
+  await signOutCustomer();
+  const signupEmail = `faith.mutua.${Date.now()}@oohgas.ke`;
+  const emailSignupSession = await signUpWithEmailAccount({
+    firstName: 'Faith',
+    lastName: 'Mutua',
+    email: signupEmail,
+    password: 'StrongPassword99',
+  });
+  assert(Boolean(emailSignupSession.user.id), 'Email signup generates unique customer ID');
+  assert(emailSignupSession.user.fullName === 'Faith Mutua', 'Combines firstName and lastName into fullName');
+  assert(emailSignupSession.user.email === signupEmail.toLowerCase(), 'Normalizes registered email');
+  assert(isCustomerLoggedIn() === true, 'Customer logged in automatically after email registration');
+
+  // Verify duplicate email rejection & short field validation
+  try {
+    await signUpWithEmailAccount({
+      firstName: 'Faith',
+      lastName: 'Mutua',
+      email: signupEmail,
+      password: 'AnotherPassword123',
+    });
+    assert(false, 'Should reject duplicate email registration');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('already exists'), 'Rejects duplicate email registration');
+  }
+
+  try {
+    await signUpWithEmailAccount({
+      firstName: 'F',
+      lastName: 'Mutua',
+      email: 'valid@example.com',
+      password: 'validpassword',
+    });
+    assert(false, 'Should reject short first name');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('first name'), 'Validates first name length');
+  }
+
+  // --------------------------------------------------------------------------
+  // TEST 16: Google Account Customer Authentication
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 16: Google Account Sign-Up / Authentication ---');
+  await signOutCustomer();
+  const promptGoogle = await signInWithGoogleCustomer();
+  assert(
+    promptGoogle.requiresAccountSelection === true || promptGoogle.oauthRedirectStarted === true,
+    'Prompts Google account selection or initiates OAuth redirect when invoked without profile'
+  );
+
+  const googleEmail = `brian.kamau.${Date.now()}@gmail.com`;
+  const googleAuthRes = await signInWithGoogleCustomer({
+    fullName: 'Brian Kamau',
+    email: googleEmail,
+  });
+  assert(Boolean(googleAuthRes.session?.user.id), 'Creates persistent customer session from Google profile');
+  assert(googleAuthRes.session?.user.fullName === 'Brian Kamau', 'Records Google display name');
+  assert(googleAuthRes.session?.user.email === googleEmail.toLowerCase(), 'Records Google email');
+  assert(isCustomerLoggedIn() === true, 'Customer actively logged in after Google authentication');
+
   console.log('\n============================================================');
-  console.log('🎉 ALL 11 CUSTOMER AUTH & REGISTRATION TESTS PASSED');
+  console.log('🎉 ALL 16 CUSTOMER AUTH, PHONE OTP, EMAIL SIGNUP & GOOGLE AUTH TESTS PASSED');
   console.log('============================================================\n');
 }
 

@@ -41,6 +41,7 @@ import { SignUpPage } from './components/auth/SignUpPage';
 import { PasswordResetPage } from './components/auth/PasswordResetPage';
 import {
   CustomerAuthSession,
+  OtpRequestResult,
   subscribeToCustomerAuth,
   getCurrentCustomerSession,
 } from './services/customerAuthService';
@@ -201,6 +202,8 @@ export default function App() {
   const [authInitialMode] = useState<'signin' | 'signup'>('signin');
   const [authRedirectReason, setAuthRedirectReason] = useState<string | null>(null);
   const [authRedirectDestination, setAuthRedirectDestination] = useState<string | null>(null);
+  const [welcomePendingOtp, setWelcomePendingOtp] = useState<OtpRequestResult | null>(null);
+  const [authEmailFallbackMode, setAuthEmailFallbackMode] = useState<boolean>(false);
   const [pendingOrderDetails, setPendingOrderDetails] = useState<{
     fullName: string;
     phoneNumber: string;
@@ -290,6 +293,8 @@ export default function App() {
   const handleCloseAuthPage = () => {
     setAuthPage(null);
     setAuthRedirectReason(null);
+    setWelcomePendingOtp(null);
+    setAuthEmailFallbackMode(false);
     try {
       if (
         window.location.hash.startsWith('#login') ||
@@ -692,11 +697,17 @@ export default function App() {
   };
 
   // Resume and submit/return after successful customer login/registration
-  const handleAuthSuccess = (session: CustomerAuthSession) => {
+  const handleAuthSuccess = (session: CustomerAuthSession, updatedLocation?: NairobiLocation) => {
     setCustomerSession(session);
     setShowWelcomeScreen(false);
     setAuthPage(null);
     setIsAuthModalOpen(false);
+    setWelcomePendingOtp(null);
+    setAuthEmailFallbackMode(false);
+
+    if (updatedLocation) {
+      setCurrentLocation(updatedLocation);
+    }
 
     try {
       if (
@@ -720,6 +731,7 @@ export default function App() {
         ...pendingOrderDetails,
         fullName: session.user.fullName,
         phoneNumber: session.user.phoneNumber,
+        estate: updatedLocation ? updatedLocation.name : pendingOrderDetails.estate,
       };
       setPendingOrderDetails(null);
       setAuthRedirectReason(null);
@@ -731,6 +743,8 @@ export default function App() {
     } else if (authRedirectDestination === 'profile') {
       setActiveTab('profile');
       setAuthRedirectDestination(null);
+    } else {
+      setActiveTab('home');
     }
   };
 
@@ -843,9 +857,36 @@ export default function App() {
   if (showWelcomeScreen && !customerSession && authPage === null) {
     return (
       <WelcomeScreen
-        onGetStarted={() => setShowWelcomeScreen(false)}
-        onLogin={() => handleOpenAuthPage('login')}
-        onRegister={() => handleOpenAuthPage('signup')}
+        onContinueWithOtp={(otpData) => {
+          setWelcomePendingOtp(otpData);
+          setAuthEmailFallbackMode(false);
+          handleOpenAuthPage('login');
+        }}
+        onBrowseAsGuest={() => {
+          setShowWelcomeScreen(false);
+          setAuthPage(null);
+          setActiveTab('home');
+        }}
+        onOpenEmailLogin={() => {
+          setWelcomePendingOtp(null);
+          setAuthEmailFallbackMode(true);
+          handleOpenAuthPage('login');
+        }}
+      />
+    );
+  }
+
+  // SCREEN 2A: Standalone Full-Bleed Registration Page
+  if (authPage === 'signup') {
+    return (
+      <SignUpPage
+        onBackToHome={handleCloseAuthPage}
+        onNavigateToSignIn={() => handleOpenAuthPage('login')}
+        onNavigateToPasswordReset={() => handleOpenAuthPage('reset-password')}
+        redirectReason={authRedirectReason}
+        initialOtpData={welcomePendingOtp}
+        initialLocation={currentLocation}
+        onSuccess={handleAuthSuccess}
       />
     );
   }
@@ -982,22 +1023,16 @@ export default function App() {
               : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
           }
         >
-          {/* SCREEN 2: Standalone Login / Registration / Reset Password Pages */}
+          {/* SCREEN 2: Standalone Phone + OTP / Location / Reset Password Pages */}
           {authPage === 'login' && (
             <LoginPage
               onBackToHome={handleCloseAuthPage}
               onNavigateToSignUp={() => handleOpenAuthPage('signup')}
               onNavigateToPasswordReset={() => handleOpenAuthPage('reset-password')}
               redirectReason={authRedirectReason}
-              onSuccess={handleAuthSuccess}
-            />
-          )}
-
-          {authPage === 'signup' && (
-            <SignUpPage
-              onBackToHome={handleCloseAuthPage}
-              onNavigateToSignIn={() => handleOpenAuthPage('login')}
-              redirectReason={authRedirectReason}
+              initialOtpData={welcomePendingOtp}
+              initialLocation={currentLocation}
+              initialEmailMode={authEmailFallbackMode}
               onSuccess={handleAuthSuccess}
             />
           )}
@@ -1375,6 +1410,8 @@ export default function App() {
         onClose={() => setIsAuthModalOpen(false)}
         initialMode={authInitialMode}
         redirectReason={authRedirectReason}
+        initialLocation={currentLocation}
+        onNavigateToPasswordReset={() => handleOpenAuthPage('reset-password')}
         onSuccess={handleAuthSuccess}
       />
 
