@@ -26,6 +26,7 @@ import {
   completePhoneRegistration,
   signUpWithEmailAccount,
   signInWithGoogleCustomer,
+  signInWithPhonePassword,
   findRegisteredCustomerAccount,
   DEMO_CUSTOMER,
 } from '../src/services/customerAuthService';
@@ -348,8 +349,54 @@ async function runAuthTests() {
   assert(googleAuthRes.session?.user.email === googleEmail.toLowerCase(), 'Records Google email');
   assert(isCustomerLoggedIn() === true, 'Customer actively logged in after Google authentication');
 
+  // --------------------------------------------------------------------------
+  // TEST 17: Kenyan Phone (+254) + Password Login Validation
+  // --------------------------------------------------------------------------
+  console.log('\n--- Test 17: Kenyan Phone (+254) + Password Login ---');
+  await signOutCustomer();
+  const phoneLoginRes = await signInWithPhonePassword({
+    phoneNumber: testUser.phoneNumber,
+    password: testUser.password,
+    rememberMe: true,
+  });
+  assert(phoneLoginRes.user.id === regSession.user.id, 'Authenticates registered customer via Kenyan phone + password');
+  assert(isCustomerLoggedIn() === true, 'Customer session active after phone + password sign in');
+
+  try {
+    await signInWithPhonePassword({
+      phoneNumber: testUser.phoneNumber,
+      password: 'WrongPassword123',
+      rememberMe: false,
+    });
+    assert(false, 'Should reject wrong password on phone login');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('incorrect password'), 'Rejects incorrect password on phone login');
+  }
+
+  try {
+    await signInWithPhonePassword({
+      phoneNumber: '1234',
+      password: 'ValidPassword123',
+      rememberMe: false,
+    });
+    assert(false, 'Should reject malformed Kenyan phone number');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('valid kenyan'), 'Rejects invalid Kenyan phone number');
+  }
+
+  try {
+    await signInWithPhonePassword({
+      phoneNumber: '0799000111',
+      password: 'ValidPassword123',
+      rememberMe: false,
+    });
+    assert(false, 'Should reject unregistered Kenyan phone number');
+  } catch (err: any) {
+    assert(err.message.toLowerCase().includes('no account found'), 'Rejects unregistered phone number cleanly');
+  }
+
   console.log('\n============================================================');
-  console.log('🎉 ALL 16 CUSTOMER AUTH, PHONE OTP, EMAIL SIGNUP & GOOGLE AUTH TESTS PASSED');
+  console.log('🎉 ALL 17 CUSTOMER AUTH, PHONE OTP, EMAIL SIGNUP, GOOGLE & LOGIN TESTS PASSED');
   console.log('============================================================\n');
 }
 

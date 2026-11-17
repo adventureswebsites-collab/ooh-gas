@@ -49,10 +49,20 @@ interface ServerCustomerRecord {
   phoneNumber: string;
   e164Phone: string;
   email: string;
+  passwordHash?: string;
   role: 'customer';
   isVerified: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+function hashServerPassword(password: string): string {
+  return crypto.createHmac('sha256', 'oohgas-auth-v1').update(String(password)).digest('hex');
+}
+
+function sanitizeCustomer(record: ServerCustomerRecord): Omit<ServerCustomerRecord, 'passwordHash'> {
+  const { passwordHash: _ignored, ...safeRecord } = record;
+  return safeRecord;
 }
 
 interface PendingOtpChallenge {
@@ -944,7 +954,7 @@ async function startServer() {
         isReturningCustomer: true,
         normalizedPhone: parsed.normalizedPhone,
         e164Phone: parsed.e164Phone,
-        customer: existingCustomer,
+        customer: sanitizeCustomer(existingCustomer),
       });
     }
 
@@ -1010,7 +1020,7 @@ async function startServer() {
     }
     saveServerCustomers();
 
-    return res.status(201).json({ customer: record });
+    return res.status(201).json({ customer: sanitizeCustomer(record) });
   });
 
   app.post('/api/auth/register-email', (req: Request, res: Response) => {
@@ -1046,6 +1056,7 @@ async function startServer() {
       phoneNumber: '',
       e164Phone: '',
       email: cleanEmail,
+      passwordHash: hashServerPassword(String(password)),
       role: 'customer',
       isVerified: true,
       createdAt: nowIso,
@@ -1055,7 +1066,44 @@ async function startServer() {
     serverCustomers.push(record);
     saveServerCustomers();
 
-    return res.status(201).json({ customer: record });
+    return res.status(201).json({ customer: sanitizeCustomer(record) });
+  });
+
+  app.post('/api/auth/login', (req: Request, res: Response) => {
+    const { phoneNumber, email, password } = req.body || {};
+    const passStr = String(password || '');
+
+    if (passStr.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    let existing: ServerCustomerRecord | undefined;
+    if (phoneNumber && String(phoneNumber).trim()) {
+      const parsed = normalizeServerKenyanPhone(String(phoneNumber));
+      if (!parsed.valid) {
+        return res.status(400).json({ error: 'Enter a valid Kenyan mobile number (+254 7XX or 01XX).' });
+      }
+      existing = serverCustomers.find((c) => c.e164Phone === parsed.e164Phone);
+    } else if (email && String(email).includes('@')) {
+      const cleanEmail = String(email).trim().toLowerCase();
+      existing = serverCustomers.find((c) => c.email.toLowerCase() === cleanEmail);
+    } else {
+      return res.status(400).json({ error: 'Please enter a valid Kenyan phone number.' });
+    }
+
+    if (!existing) {
+      return res.status(404).json({
+        error: 'No account found for this phone number. Tap Create account below to register.',
+      });
+    }
+
+    if (existing.passwordHash && existing.passwordHash !== hashServerPassword(passStr)) {
+      return res.status(401).json({
+        error: 'Incorrect password. Please check your password and try again.',
+      });
+    }
+
+    return res.json({ customer: sanitizeCustomer(existing) });
   });
 
   app.post('/api/auth/google', (req: Request, res: Response) => {
@@ -1079,7 +1127,7 @@ async function startServer() {
         serverCustomers[existingIdx].fullName = cleanName;
       }
       saveServerCustomers();
-      return res.json({ customer: serverCustomers[existingIdx], isNewCustomer: false });
+      return res.json({ customer: sanitizeCustomer(serverCustomers[existingIdx]), isNewCustomer: false });
     }
 
     const record: ServerCustomerRecord = {
@@ -1097,7 +1145,7 @@ async function startServer() {
     serverCustomers.push(record);
     saveServerCustomers();
 
-    return res.status(201).json({ customer: record, isNewCustomer: true });
+    return res.status(201).json({ customer: sanitizeCustomer(record), isNewCustomer: true });
   });
 
   // ==========================================

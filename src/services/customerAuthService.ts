@@ -1756,3 +1756,195 @@ export async function signInWithGoogleCustomer(googleProfile?: {
   return { session };
 }
 
+/**
+ * 11. Kenyan Phone (+254) + Password Login & Remember Me Support
+ */
+const REMEMBERED_PHONE_STORAGE_KEY = 'oohgas_remembered_login_phone';
+
+export function getRememberedLoginPhone(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return localStorage.getItem(REMEMBERED_PHONE_STORAGE_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+export function setRememberedLoginPhone(phone: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (phone && phone.trim()) {
+      localStorage.setItem(REMEMBERED_PHONE_STORAGE_KEY, phone.trim());
+    } else {
+      localStorage.removeItem(REMEMBERED_PHONE_STORAGE_KEY);
+    }
+  } catch (_) {}
+}
+
+export async function signInWithPhonePassword(params: {
+  phoneNumber: string;
+  password: string;
+  rememberMe?: boolean;
+}): Promise<CustomerAuthSession> {
+  const { phoneNumber, password, rememberMe = true } = params;
+
+  if (!isValidKenyanPhone(phoneNumber)) {
+    throw new Error('Enter a valid Kenyan mobile number (e.g. 712 345 678).');
+  }
+
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
+  const normalizedPhone = normalizeKenyanPhone(phoneNumber);
+  const e164Phone = toE164KenyanPhone(phoneNumber);
+  const localInputDigits = normalizedPhone.replace(/^\+254\s*/, '');
+
+  setRememberedLoginPhone(rememberMe ? localInputDigits : null);
+
+  // 1. Check real Supabase Auth when configured
+  if (isSupabaseConfigured && supabase) {
+    try {
+      let targetEmail: string | null = null;
+      const { data: profileMatches } = await supabase
+        .from('profiles')
+        .select('email, phone_number')
+        .or(`phone_number.eq.${normalizedPhone},phone_number.eq.${e164Phone}`)
+        .limit(1);
+
+      if (profileMatches && profileMatches.length > 0 && profileMatches[0].email) {
+        targetEmail = profileMatches[0].email;
+      }
+
+      if (targetEmail) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: targetEmail,
+          password,
+        });
+        if (error) {
+          throw new Error(error.message);
+        }
+        if (data.user) {
+          const fullName = data.user.user_metadata?.full_name || 'Customer';
+          const session: CustomerAuthSession = {
+            user: {
+              id: data.user.id,
+              email: data.user.email || targetEmail,
+              fullName,
+              phoneNumber: normalizedPhone,
+              role: 'customer',
+              createdAt: data.user.created_at || new Date().toISOString(),
+            },
+            profile: {
+              id: data.user.id,
+              role: 'customer',
+              fullName,
+              phoneNumber: normalizedPhone,
+              email: data.user.email || targetEmail,
+              isVerified: true,
+              createdAt: data.user.created_at || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            token: data.session?.access_token,
+          };
+          persistCustomerSession(session);
+          return session;
+        }
+      }
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      if (
+        msg &&
+        !msg.toLowerCase().includes('fetch') &&
+        !msg.toLowerCase().includes('network') &&
+        !msg.toLowerCase().includes('rate limit')
+      ) {
+        throw e;
+      }
+    }
+  }
+
+  // 2. Check registered local account store
+  const registered = findRegisteredCustomerAccount(normalizedPhone);
+  if (registered) {
+    if (registered.password && registered.password !== password) {
+      throw new Error('Incorrect password. Please check your credentials and try again.');
+    }
+    const session: CustomerAuthSession = {
+      user: {
+        id: registered.id,
+        email: registered.email,
+        fullName: registered.fullName,
+        phoneNumber: registered.phoneNumber || normalizedPhone,
+        role: 'customer',
+        createdAt: registered.createdAt,
+      },
+      profile: {
+        id: registered.id,
+        role: 'customer',
+        fullName: registered.fullName,
+        phoneNumber: registered.phoneNumber || normalizedPhone,
+        email: registered.email,
+        isVerified: true,
+        createdAt: registered.createdAt,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    persistCustomerSession(session);
+    return session;
+  }
+
+  // 3. Check Express backend customer database (/api/auth/login)
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phoneNumber: e164Phone,
+        password,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.customer) {
+      throw new Error(
+        data.error || 'No account found for this phone number. Tap Create account below to register.'
+      );
+    }
+
+    const cust = data.customer;
+    const session: CustomerAuthSession = {
+      user: {
+        id: cust.id,
+        email: cust.email,
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || normalizedPhone,
+        role: 'customer',
+        createdAt: cust.createdAt,
+      },
+      profile: {
+        id: cust.id,
+        role: 'customer',
+        fullName: cust.fullName,
+        phoneNumber: cust.phoneNumber || normalizedPhone,
+        email: cust.email,
+        isVerified: true,
+        createdAt: cust.createdAt,
+        updatedAt: cust.updatedAt,
+      },
+    };
+    saveRegisteredCustomerAccount({
+      id: cust.id,
+      email: cust.email,
+      phoneNumber: cust.phoneNumber || normalizedPhone,
+      fullName: cust.fullName,
+      password,
+      createdAt: cust.createdAt,
+    });
+    persistCustomerSession(session);
+    return session;
+  }
+
+  throw new Error('No account found for this phone number. Tap Create account below to register.');
+}
+
+

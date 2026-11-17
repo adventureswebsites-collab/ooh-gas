@@ -876,7 +876,21 @@ export default function App() {
     );
   }
 
-  // SCREEN 2A: Standalone Full-Bleed Registration Page
+  // SCREEN 2A: Standalone Full-Bleed Login & Registration Pages
+  if (authPage === 'login' && !welcomePendingOtp) {
+    return (
+      <LoginPage
+        onBackToHome={handleCloseAuthPage}
+        onNavigateToSignUp={() => handleOpenAuthPage('signup')}
+        onNavigateToPasswordReset={() => handleOpenAuthPage('reset-password')}
+        redirectReason={authRedirectReason}
+        initialLocation={currentLocation}
+        initialEmailMode={authEmailFallbackMode}
+        onSuccess={handleAuthSuccess}
+      />
+    );
+  }
+
   if (authPage === 'signup') {
     return (
       <SignUpPage
@@ -1023,8 +1037,8 @@ export default function App() {
               : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
           }
         >
-          {/* SCREEN 2: Standalone Phone + OTP / Location / Reset Password Pages */}
-          {authPage === 'login' && (
+          {/* SCREEN 2: Welcome OTP Continuation / Reset Password Pages */}
+          {authPage === 'login' && welcomePendingOtp && (
             <LoginPage
               onBackToHome={handleCloseAuthPage}
               onNavigateToSignUp={() => handleOpenAuthPage('signup')}
