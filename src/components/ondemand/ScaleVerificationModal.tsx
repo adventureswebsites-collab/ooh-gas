@@ -82,7 +82,7 @@ export const ScaleVerificationModal: React.FC<ScaleVerificationModalProps> = ({
           </div>
 
           <div className="pt-2 border-t border-emerald-950 flex items-center justify-around text-[10px] text-slate-400 font-mono">
-            <span>Tare: ~{(expectedWeight - (order.cylinderSize === '6kg' ? 6 : order.cylinderSize === '13kg' ? 13 : 29)).toFixed(1)} kg</span>
+            <span>Tare: ~{(expectedWeight - (parseFloat(order.cylinderSize) || 13)).toFixed(1)} kg</span>
             <span className="text-emerald-400 font-bold">Net Gas: {order.cylinderSize}</span>
             <span className="text-[#84cc16] font-bold">100% Full ✓</span>
           </div>

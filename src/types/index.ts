@@ -1,4 +1,4 @@
-export type CylinderSize = '6kg' | '13kg' | '29kg';
+export type CylinderSize = '6kg' | '13kg' | '22.5kg' | '29kg' | '50kg';
 
 export type PurchaseType = 'refill' | 'complete'; // refill empty cylinder vs buy new cylinder with gas
 
@@ -97,16 +97,19 @@ export interface RiderInfo {
   safetyCertified: boolean;
   currentLocationName: string;
   mapCoords?: { x: number; y: number };
+  coordinates?: { lat: number; lng: number };
 }
 
 export type OnDemandRequestStage =
   | 'idle'
   | 'confirm_request'
+  | 'order_received'
   | 'searching_supplier'
   | 'supplier_offered'
   | 'supplier_accepted'
   | 'preparing'
   | 'rider_assigned'
+  | 'picked_up'
   | 'in_transit'
   | 'arrived_at_gate'
   | 'scale_verification'
@@ -141,6 +144,12 @@ export interface OnDemandOrderState {
   handoverPin: string;
   etaMinutes: number;
   stage: OnDemandRequestStage;
+  deliveryTimingType?: 'asap' | 'scheduled';
+  scheduledFor?: {
+    date: string;
+    dateFormatted: string;
+    slotLabel: string;
+  };
   // Customer & live driver tracking attributes
   customerId?: string;
   deliveryOtp?: string;

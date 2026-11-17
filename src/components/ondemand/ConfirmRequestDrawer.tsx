@@ -471,23 +471,23 @@ export const ConfirmRequestDrawer: React.FC<ConfirmRequestDrawerProps> = ({
           <button
             type="submit"
             disabled={isValidating}
-            className="w-full min-h-[48px] py-3 rounded-xl bg-[#14532d] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-extrabold text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+            className="w-full min-h-[48px] py-3.5 rounded-2xl bg-[#226946] hover:bg-[#195136] text-white font-bold text-sm sm:text-base shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
           >
             {isValidating ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-lime-300" />
-                <span>Verifying Coverage & Supplier Stock...</span>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Verifying Coverage &amp; Supplier Stock...</span>
               </>
             ) : !customerSession ? (
               <>
-                <Lock className="w-4 h-4 text-[#bef264]" />
+                <Lock className="w-4 h-4" />
                 <span>Sign In to Complete Order</span>
-                <ArrowRight className="w-4 h-4 text-[#bef264]" />
+                <ArrowRight className="w-4 h-4" />
               </>
             ) : (
               <>
-                <span>Confirm & Find My Gas</span>
-                <ArrowRight className="w-4 h-4 text-[#bef264]" />
+                <span>Confirm &amp; Find My Gas</span>
+                <ArrowRight className="w-4 h-4" />
               </>
             )}
           </button>

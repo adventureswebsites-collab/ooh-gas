@@ -21,6 +21,7 @@ import {
   GeocodedPlace,
 } from '../../services/mapboxService';
 import { adminSaveZone, getStoredAdminToken } from '../../services/deliveryZoneService';
+import { NAIROBI_LOCATIONS } from '../../data/mockData';
 import { MapboxTokenModal } from './MapboxTokenModal';
 import { AdminZoneModal } from './AdminZoneModal';
 import {
@@ -40,6 +41,7 @@ import {
   Check,
   AlertTriangle,
   Save,
+  LocateFixed,
 } from 'lucide-react';
 
 interface MapboxDeliveryMapProps {
@@ -55,74 +57,142 @@ interface MapboxDeliveryMapProps {
   onZonesUpdated?: () => void;
   onOpenLocationModal?: () => void;
   onSelectLocation?: (location: NairobiLocation) => void;
+  onSelectSupplierPin?: (supplier: Supplier) => void;
+  onSelectRiderPin?: (rider: RiderInfo) => void;
+  searchValue?: string;
+  onSearchValueChange?: (value: string) => void;
+  isHomeHero?: boolean;
+  liveDriverLocation?: {
+    latitude: number;
+    longitude: number;
+    heading: number | null;
+    speed: number | null;
+    accuracy: number;
+    recordedAt?: string;
+  } | null;
+  onDriverTelemetryUpdated?: (telemetry: { distanceRemainingKm: number; etaMinutes: number }) => void;
+  heightClassName?: string;
+  hideSearchOverlay?: boolean;
 }
 
 // ==========================================
-// LPG Gas Cylinder SVG & Dynamic Marker Generator
-// Clean green-and-white visual style with pulsing aura
+// Uber-Style Realistic Motorbike Vehicle Marker
+// Features top-down motorcycle, rider with helmet, cargo box,
+// dynamic headlight beam projection, and smooth heading rotation
+// ==========================================
+function createRealisticMotorbikeMarkerElement(
+  heading: number = 0,
+  speed: number | null = 28,
+  isLiveGps: boolean = false,
+  statusLabelText?: string
+): HTMLDivElement {
+  const container = document.createElement('div');
+  container.className = 'uber-live-driver-marker-container';
+  container.style.cssText =
+    'position: relative; width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none;';
+
+  const pulseAura = `<div style="position: absolute; inset: 4px; border-radius: 9999px; background: rgba(34, 105, 70, 0.16); animation: ping 2.6s cubic-bezier(0, 0, 0.2, 1) infinite; pointer-events: none;"></div>`;
+
+  const topPill = statusLabelText
+    ? `<div style="position: absolute; top: -22px; left: 50%; transform: translateX(-18%); background: #ffffff; color: #16A34A; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 9999px; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 3px 10px rgba(0,0,0,0.14); white-space: nowrap; display: flex; align-items: center; gap: 5px; pointer-events: none;">
+        <span style="width: 6px; height: 6px; border-radius: 9999px; background: #16A34A;"></span>
+        <span style="text-decoration: underline; text-decoration-color: rgba(22,163,74,0.45); text-underline-offset: 2px;">${statusLabelText}</span>
+      </div>`
+    : speed !== null
+    ? `<div class="uber-speed-badge" style="position: absolute; bottom: -8px; background: #15191C; color: #ffffff; font-size: 8.5px; font-weight: 800; padding: 1.5px 6px; border-radius: 9999px; border: 1.5px solid #22C55E; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.28); display: flex; align-items: center; gap: 3.5px;">
+        <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${isLiveGps ? '#22C55E' : '#86EFAC'};"></span>
+        <span>${speed > 0 ? `${Math.round(speed)} km/h` : 'En Route'}</span>
+      </div>`
+    : '';
+
+  container.innerHTML = `
+    ${pulseAura}
+    ${topPill}
+
+    <!-- Green Courier Delivery Motorcycle SVG rotated by heading -->
+    <div class="uber-vehicle-body" style="transform: rotate(${heading}deg); transition: transform 0.35s cubic-bezier(0.2, 0, 0, 1); filter: drop-shadow(0 4px 10px rgba(0,0,0,0.28));">
+      <svg width="44" height="44" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <ellipse cx="24" cy="25" rx="8" ry="17" fill="rgba(0,0,0,0.18)" />
+        <rect x="22" y="33" width="4" height="10" rx="2" fill="#15191C" />
+        <rect x="14.5" y="21" width="19" height="13.5" rx="3" fill="#16A34A" stroke="#ffffff" stroke-width="1.6" />
+        <rect x="18" y="24" width="12" height="2" rx="1" fill="#ffffff" fill-opacity="0.9" />
+        <ellipse cx="24" cy="17.5" rx="7.2" ry="5" fill="#14532D" stroke="#ffffff" stroke-width="1" />
+        <circle cx="24" cy="15" r="4.3" fill="#22C55E" stroke="#ffffff" stroke-width="1.3" />
+        <path d="M21.8 13.4C22.6 12.8 25.4 12.8 26.2 13.4" stroke="#15191C" stroke-width="1.8" stroke-linecap="round" />
+        <path d="M14 11.5L24 12.5L34 11.5" stroke="#334155" stroke-width="2.2" stroke-linecap="round" />
+        <rect x="22" y="3" width="4" height="9" rx="2" fill="#15191C" />
+        <circle cx="24" cy="4" r="2.2" fill="#FEF08A" />
+      </svg>
+    </div>
+  `;
+
+  return container;
+}
+
+// ==========================================
+// Uber-Style Distinct Destination Marker
+// ==========================================
+function createUberDestinationMarkerElement(label: string = 'Delivery Location'): HTMLDivElement {
+  const container = document.createElement('div');
+  container.className = 'uber-destination-marker';
+  container.style.cssText =
+    'position: relative; display: flex; flex-direction: column; align-items: center; user-select: none;';
+
+  container.innerHTML = `
+    <div style="position: absolute; top: -24px; white-space: nowrap; background: #15191C; color: #ffffff; font-size: 9.5px; font-weight: 800; padding: 2px 8px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+      ${label}
+    </div>
+    <div style="background-color: #2563EB; border: 3px solid #ffffff; width: 28px; height: 28px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(37,99,235,0.45);">
+      <div style="width: 8px; height: 8px; background-color: #ffffff; border-radius: 9999px;"></div>
+    </div>
+  `;
+
+  return container;
+}
+
+// ==========================================
+// Green Teardrop Gas-Cylinder Marker + Clean White Callout (Matches Reference)
 // ==========================================
 function createGasCylinderMarkerElement(
   sup: Supplier,
   isServing: boolean,
   isOutOfArea: boolean,
-  hasSelection: boolean
+  showCallout: boolean = true
 ): HTMLDivElement {
   const container = document.createElement('div');
   container.className = `ooh-gas-depot-marker animate-marker-pop cursor-pointer ${
-    isServing ? 'animate-gas-aura z-20' : isOutOfArea ? 'opacity-60 z-10' : 'z-10'
+    isOutOfArea ? 'opacity-60 z-10' : 'z-20'
   }`;
 
-  const primaryColor = isServing ? '#10b981' : isOutOfArea ? '#64748b' : '#14532d';
-  const pulseHtml = isServing
-    ? `<div class="animate-gas-pulse-ring" style="position: absolute; inset: -6px; border-radius: 9999px; border: 2px solid rgba(16, 185, 129, 0.65); background: rgba(16, 185, 129, 0.15); pointer-events: none;"></div>`
+  const pinBg = isOutOfArea ? '#64748B' : '#16A34A';
+  const shortName =
+    sup.brand === 'K-Gas'
+      ? 'K-Gas Depot'
+      : sup.brand === 'TotalEnergies'
+      ? 'TotalEnergies'
+      : sup.brand === 'Shell Gas'
+      ? 'Shell Gas'
+      : sup.name.split(' ')[0];
+
+  const calloutHtml = showCallout
+    ? `<div style="margin-left: 6px; background: rgba(255,255,255,0.97); border: 1px solid rgba(0,0,0,0.06); border-radius: 12px; padding: 5px 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div style="font-size: 11px; font-weight: 800; color: #15191C; line-height: 1.15;">${shortName}</div>
+        <div style="font-size: 10px; font-weight: 600; color: #6B7280; line-height: 1.2;">${sup.distanceKm} km</div>
+      </div>`
     : '';
 
-  const badgeText = isServing
-    ? '✓ Delivers here'
-    : isOutOfArea
-    ? 'Outside area'
-    : sup.brandLettermark || 'LPG';
-
-  const badgeBg = isServing
-    ? '#064e3b'
-    : isOutOfArea
-    ? '#475569'
-    : '#14532d';
-
   container.innerHTML = `
-    <div style="position: relative; display: flex; flex-direction: column; align-items: center; user-select: none;">
-      ${pulseHtml}
-      
-      <!-- Realistic Clean Ooh Gas LPG Cylinder Icon -->
-      <div style="position: relative; width: 34px; height: 42px; display: flex; flex-direction: column; align-items: center;">
-        <svg width="34" height="42" viewBox="0 0 34 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 3px 6px rgba(0,0,0,0.22));">
-          <!-- Cylinder Handle / Collar -->
-          <path d="M11 6V3C11 2.44772 11.4477 2 12 2H22C22.5523 2 23 2.44772 23 3V6" stroke="${primaryColor}" stroke-width="2" stroke-linecap="round"/>
-          <path d="M14 6H20" stroke="#047857" stroke-width="2.5" stroke-linecap="round"/>
-          <!-- Brass Valve in Center -->
-          <circle cx="17" cy="5" r="1.5" fill="#f59e0b"/>
-
-          <!-- Cylinder Body Shell -->
-          <rect x="5" y="8" width="24" height="28" rx="8" fill="#ffffff" stroke="${primaryColor}" stroke-width="2"/>
-          
-          <!-- Brand Accent Stripe -->
-          <rect x="7" y="15" width="20" height="12" rx="3" fill="${isServing ? '#ecfdf5' : '#f8fafc'}"/>
-          <path d="M7 19H27" stroke="${primaryColor}" stroke-width="1.2" stroke-opacity="0.5"/>
-          <path d="M7 23H27" stroke="${primaryColor}" stroke-width="1.2" stroke-opacity="0.5"/>
-
-          <!-- Ooh Gas Flame Emblem -->
-          <path d="M17 13C17 13 13.5 17 13.5 19.5C13.5 21.433 15.067 23 17 23C18.933 23 20.5 21.433 20.5 19.5C20.5 17 17 13 17 13Z" fill="${primaryColor}"/>
-          <path d="M17 17C17 17 15.5 19 15.5 20.2C15.5 21.194 16.172 22 17 22C17.828 22 18.5 21.194 18.5 20.2C18.5 19 17 17 17 17Z" fill="#fbbf24"/>
-
-          <!-- Base Ring -->
-          <rect x="9" y="36" width="16" height="3" rx="1.5" fill="${primaryColor}"/>
+    <div style="position: relative; display: flex; align-items: center; user-select: none;">
+      <div style="position: relative; width: 34px; height: 42px; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.24));">
+        <svg width="34" height="42" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M18 1C8.611 1 1 8.611 1 18C1 29.75 18 43 18 43C18 43 35 29.75 35 18C35 8.611 27.389 1 18 1Z" fill="${pinBg}" stroke="#ffffff" stroke-width="2"/>
+          <path d="M15 9.5H21M16.2 9.5V11.2H19.8V9.5" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
+          <rect x="12.5" y="11.5" width="11" height="14" rx="3" fill="#ffffff"/>
+          <path d="M12.5 16.5H23.5" stroke="${pinBg}" stroke-width="1.4"/>
+          <rect x="14.5" y="25.5" width="7" height="1.8" rx="0.9" fill="#ffffff"/>
         </svg>
-
-        <!-- Dynamic Brand / Status Micro-Badge -->
-        <div style="position: absolute; bottom: -8px; background: ${badgeBg}; color: #ffffff; font-size: 8.5px; font-weight: 700; padding: 1.5px 5px; border-radius: 9999px; border: 1.5px solid #ffffff; box-shadow: 0 2px 4px rgba(0,0,0,0.15); white-space: nowrap;">
-          ${badgeText}
-        </div>
       </div>
+      ${calloutHtml}
     </div>
   `;
 
@@ -193,6 +263,7 @@ function createSupplierPopupHtml(
 export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   currentLocation,
   suppliers,
+  riders = [],
   activeOrder,
   riderProgressPercent = 35,
   isExpanded = false,
@@ -202,12 +273,32 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   onZonesUpdated,
   onOpenLocationModal,
   onSelectLocation,
+  onSelectSupplierPin,
+  onSelectRiderPin,
+  searchValue,
+  onSearchValueChange,
+  isHomeHero = false,
+  liveDriverLocation,
+  onDriverTelemetryUpdated,
+  heightClassName,
+  hideSearchOverlay = false,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Engine state: mapbox-gl (if WebGL available) or leaflet (standard HTML5 fallback)
+  // Auto-follow delivery vehicle toggle
+  const [autoFollowVehicle, setAutoFollowVehicle] = useState(true);
+  const [driverRouteInfo, setDriverRouteInfo] = useState<{ distanceKm: number; durationMin: number } | null>(null);
+  const currentRiderPosRef = useRef<[number, number] | null>(null);
+  const riderHeadingRef = useRef<number>(0);
+  const lastReroutedPosRef = useRef<[number, number] | null>(null);
+  const lastReroutedTimeRef = useRef<number>(0);
+  const currentRouteCoordsRef = useRef<[number, number][]>([]);
+
+
+  // Engine state: mapbox-gl (if WebGL available AND token set) or clean Google Maps-style Leaflet Voyager road tiles
   const [engine, setEngine] = useState<'mapbox-gl' | 'leaflet'>(() => {
-    return isWebGLAvailable() ? 'mapbox-gl' : 'leaflet';
+    const token = getMapboxToken();
+    return isWebGLAvailable() && Boolean(token) ? 'mapbox-gl' : 'leaflet';
   });
 
   // Token management
@@ -216,10 +307,11 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
+  const [isLayersMenuOpen, setIsLayersMenuOpen] = useState(false);
 
-  // Map style state: Streets vs Light (Uber style)
+  // Map style state: Streets (Google Maps clean light road tiles) vs Minimal Light
   const [mapStyle, setMapStyle] = useState<'streets' | 'light'>('streets');
-  const [showZonesOverlay, setShowZonesOverlay] = useState(true);
+  const [showZonesOverlay, setShowZonesOverlay] = useState(!isHomeHero);
 
   // Interactive Admin Polygon Vertex Editor on Map
   const [adminEditingZone, setAdminEditingZone] = useState<DeliveryZone | null>(null);
@@ -227,7 +319,12 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const [isSavingPolygon, setIsSavingPolygon] = useState(false);
 
   // Search state
-  const [searchQuery, setSearchQuery] = useState('');
+  const [internalSearchQuery, setInternalSearchQuery] = useState('');
+  const effectiveSearchQuery = searchValue !== undefined ? searchValue : internalSearchQuery;
+  const setSearchQuery = (val: string) => {
+    setInternalSearchQuery(val);
+    onSearchValueChange?.(val);
+  };
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<GeocodedPlace[]>([]);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -248,6 +345,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const leafletMapRef = useRef<L.Map | null>(null);
   const leafletCustomerMarkerRef = useRef<L.Marker | null>(null);
   const leafletRiderMarkerRef = useRef<L.Marker | null>(null);
+  const leafletIdleRidersRef = useRef<L.Marker[]>([]);
   const leafletSupplierMarkersRef = useRef<L.Marker[]>([]);
   const leafletRouteLayerRef = useRef<L.Polyline | null>(null);
   const leafletZoneLayersRef = useRef<L.Polygon[]>([]);
@@ -255,6 +353,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
   const mapboxCustomerMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const mapboxRiderMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const mapboxIdleRidersRef = useRef<mapboxgl.Marker[]>([]);
   const mapboxSupplierMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const mapboxVertexMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const mapboxAnimationFrameRef = useRef<number | null>(null);
@@ -284,10 +383,29 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     return () => window.removeEventListener('storage', handleStorage);
   }, [activeToken]);
 
-  // Handle forward search input with debounce
+  // Handle forward search input with debounce (Mapbox Places + local Nairobi locations fallback)
   useEffect(() => {
-    if (!searchQuery.trim() || !activeToken) {
+    const q = effectiveSearchQuery.trim();
+    if (!q) {
       setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const localMatches: GeocodedPlace[] = NAIROBI_LOCATIONS.filter(
+      (loc) =>
+        loc.name.toLowerCase().includes(q.toLowerCase()) ||
+        loc.area.toLowerCase().includes(q.toLowerCase())
+    ).map((loc) => ({
+      id: loc.id,
+      name: loc.name,
+      area: loc.area,
+      fullAddress: `${loc.name} · ${loc.area}`,
+      coordinates: { lng: loc.coordinates.lng, lat: loc.coordinates.lat },
+    }));
+
+    if (!activeToken) {
+      setSearchResults(localMatches);
       setIsSearching(false);
       return;
     }
@@ -296,19 +414,20 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     setIsSearching(true);
 
     searchDebounceRef.current = setTimeout(async () => {
-      const results = await searchPlaces(
-        searchQuery,
+      const remote = await searchPlaces(
+        q,
         { lng: customerCoords.lng, lat: customerCoords.lat },
         activeToken
       );
-      setSearchResults(results);
+      const merged = remote.length > 0 ? remote : localMatches;
+      setSearchResults(merged);
       setIsSearching(false);
-    }, 300);
+    }, 280);
 
     return () => {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     };
-  }, [searchQuery, activeToken, customerCoords.lng, customerCoords.lat]);
+  }, [effectiveSearchQuery, activeToken, customerCoords.lng, customerCoords.lat]);
 
   // Reverse geocode when pin moves
   const handlePinMoved = useCallback(
@@ -361,17 +480,17 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       ? `https://api.mapbox.com/styles/v1/mapbox/${
           mapStyle === 'streets' ? 'streets-v12' : 'light-v11'
         }/tiles/256/{z}/{x}/{y}?access_token=${activeToken}`
-      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      : mapStyle === 'streets'
+      ? 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 
     const tiles = L.tileLayer(tileUrl, {
       maxZoom: 19,
-      attribution: '© Mapbox © OpenStreetMap',
+      attribution: '© Carto © OpenStreetMap',
     }).addTo(lMap);
 
     tiles.on('tileerror', () => {
-      if (activeToken) {
-        tiles.setUrl('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
-      }
+      tiles.setUrl('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
     });
 
     setIsMapLoaded(true);
@@ -484,28 +603,24 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       leafletCustomerMarkerRef.current.remove();
     }
 
+    const isOutOfZone = coverageResult && !coverageResult.isCovered;
     const customerIcon = L.divIcon({
       className: 'leaflet-custom-customer-icon',
       html: `
-        <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -100%);">
-          <div style="background-color: ${
-            coverageResult && !coverageResult.isCovered ? '#dc2626' : '#14532d'
-          }; border: 2.5px solid #ffffff; width: 34px; height: 34px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: background-color 0.2s;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-              <circle cx="12" cy="10" r="3"/>
-            </svg>
-          </div>
-          <div style="width: 8px; height: 4px; background: rgba(0,0,0,0.25); border-radius: 9999px; margin-top: 2px;"></div>
-          <div style="position: absolute; top: -20px; white-space: nowrap; background: #ffffff; color: ${
-            coverageResult && !coverageResult.isCovered ? '#dc2626' : '#14532d'
-          }; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px; border: 1px solid #cbd5e1; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            ${coverageResult && !coverageResult.isCovered ? 'No Coverage' : 'Delivery Pin'}
-          </div>
+        <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; cursor: grab;">
+          <div style="position: absolute; inset: 4px; border-radius: 9999px; background: ${
+            isOutOfZone ? 'rgba(220,38,38,0.12)' : 'rgba(37, 99, 235, 0.14)'
+          };"></div>
+          <div style="position: absolute; inset: 14px; border-radius: 9999px; background: ${
+            isOutOfZone ? 'rgba(220,38,38,0.24)' : 'rgba(37, 99, 235, 0.24)'
+          };"></div>
+          <div style="position: relative; background-color: ${
+            isOutOfZone ? '#dc2626' : '#2563EB'
+          }; border: 3.5px solid #ffffff; width: 22px; height: 22px; border-radius: 9999px; box-shadow: 0 3px 10px rgba(37,99,235,0.45);"></div>
         </div>
       `,
-      iconSize: [34, 34],
-      iconAnchor: [17, 34],
+      iconSize: [64, 64],
+      iconAnchor: [32, 32],
     });
 
     const marker = L.marker([customerCoords.lat, customerCoords.lng], {
@@ -532,7 +647,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     handlePinMoved,
   ]);
 
-  // Leaflet: Update supplier depot markers with Animated LPG Cylinders & Aura Glow
+  // Leaflet: Supplier depot green cylinder pins with white callouts
   useEffect(() => {
     if (engine !== 'leaflet' || !leafletMapRef.current || !isMapLoaded) return;
     const lMap = leafletMapRef.current;
@@ -553,24 +668,74 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       const isServing = hasLocationSelection ? eligibleSupplierIds.has(sup.id) : true;
       const isOutOfArea = hasLocationSelection ? !eligibleSupplierIds.has(sup.id) : false;
 
-      const markerEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, hasLocationSelection);
+      const markerEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, !isDedicatedTracking);
       const popupHtml = createSupplierPopupHtml(sup, isServing, isOutOfArea, hasLocationSelection);
 
       const depotIcon = L.divIcon({
         className: 'leaflet-custom-depot-icon',
         html: markerEl.outerHTML,
-        iconSize: [34, 42],
-        iconAnchor: [17, 36],
-        popupAnchor: [0, -32],
+        iconSize: [148, 44],
+        iconAnchor: [17, 40],
+        popupAnchor: [0, -34],
       });
 
-      const marker = L.marker([lat, lng], { icon: depotIcon })
-        .bindPopup(popupHtml, { maxWidth: 260, closeButton: true })
-        .addTo(lMap);
+      const marker = L.marker([lat, lng], { icon: depotIcon }).addTo(lMap);
+      if (onSelectSupplierPin) {
+        marker.on('click', () => onSelectSupplierPin(sup));
+      } else {
+        marker.bindPopup(popupHtml, { maxWidth: 260, closeButton: true });
+      }
 
       leafletSupplierMarkersRef.current.push(marker);
     });
-  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult]);
+  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult, onSelectSupplierPin]);
+
+  // Leaflet: Idle Available Delivery Motorcycles around customer location on Home map
+  useEffect(() => {
+    if (engine !== 'leaflet' || !leafletMapRef.current || !isMapLoaded) return;
+    const lMap = leafletMapRef.current;
+
+    leafletIdleRidersRef.current.forEach((m) => m.remove());
+    leafletIdleRidersRef.current = [];
+
+    if (isDedicatedTracking || riders.length === 0) return;
+
+    const offsets: Array<[number, number, number]> = [
+      [0.0022, -0.0026, 45],
+      [-0.0028, 0.0038, 210],
+      [0.0034, 0.0029, 315],
+    ];
+
+    riders.slice(0, 4).forEach((rider, idx) => {
+      const [dLat, dLng, heading] = offsets[idx % offsets.length];
+      const lat = rider.coordinates?.lat ?? customerCoords.lat + dLat;
+      const lng = rider.coordinates?.lng ?? customerCoords.lng + dLng;
+
+      const statusText = idx === 1 ? 'On the way' : undefined;
+      const el = createRealisticMotorbikeMarkerElement(heading, null, false, statusText);
+      const bikeIcon = L.divIcon({
+        className: 'leaflet-idle-rider-icon',
+        html: el.outerHTML,
+        iconSize: [58, 58],
+        iconAnchor: [29, 29],
+      });
+
+      const marker = L.marker([lat, lng], { icon: bikeIcon }).addTo(lMap);
+      if (onSelectRiderPin) {
+        marker.on('click', () => onSelectRiderPin(rider));
+      } else {
+        marker.bindPopup(
+          `<div style="padding:8px 10px;font-family:sans-serif;font-size:11px;min-width:160px;">
+            <strong style="color:#15191C;display:block;">${rider.name}</strong>
+            <span style="color:#226946;font-weight:700;">Available · ★ ${rider.rating}</span><br/>
+            <span style="color:#6B7280;">${rider.vehicleModel} (${rider.plateNumber})</span>
+          </div>`
+        );
+      }
+
+      leafletIdleRidersRef.current.push(marker);
+    });
+  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng, onSelectRiderPin]);
 
   // Leaflet: Dedicated tracking route & moving rider
   useEffect(() => {
@@ -602,27 +767,39 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         leafletRiderMarkerRef.current.remove();
       }
 
-      const t = Math.min(100, Math.max(0, riderProgressPercent)) / 100;
-      const index = Math.min(latLngs.length - 1, Math.floor(t * (latLngs.length - 1)));
-      const riderPos = latLngs[index] || latLngs[0];
+      let riderPos: [number, number];
+      let heading = 0;
+      let speedKmH = 24;
+      let isLiveGps = false;
 
+      if (
+        liveDriverLocation &&
+        !isNaN(liveDriverLocation.latitude) &&
+        !isNaN(liveDriverLocation.longitude)
+      ) {
+        riderPos = [liveDriverLocation.latitude, liveDriverLocation.longitude];
+        isLiveGps = true;
+        speedKmH =
+          liveDriverLocation.speed != null ? Math.round(liveDriverLocation.speed * 3.6) : 22;
+        heading = liveDriverLocation.heading || 0;
+      } else {
+        const t = Math.min(100, Math.max(0, riderProgressPercent)) / 100;
+        const index = Math.min(latLngs.length - 1, Math.floor(t * (latLngs.length - 1)));
+        riderPos = latLngs[index] || latLngs[0];
+      }
+
+      const vehicleEl = createRealisticMotorbikeMarkerElement(heading, speedKmH, isLiveGps);
       const riderIcon = L.divIcon({
         className: 'leaflet-custom-rider-icon',
-        html: `
-          <div style="position: relative; display: flex; flex-direction: column; align-items: center; transform: translate(-50%, -50%);">
-            <div style="background-color: #0f172a; border: 2.5px solid #10b981; width: 34px; height: 34px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 2;">
-              <span style="font-size: 15px;">🛵</span>
-            </div>
-            <div style="margin-top: 2px; background: #0f172a; color: #10b981; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; border: 1px solid #10b981; white-space: nowrap; z-index: 2;">
-              Rider En Route
-            </div>
-          </div>
-        `,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
+        html: vehicleEl.outerHTML,
+        iconSize: [56, 56],
+        iconAnchor: [28, 28],
       });
 
       leafletRiderMarkerRef.current = L.marker(riderPos, { icon: riderIcon }).addTo(lMap);
+      if (autoFollowVehicle) {
+        lMap.panTo(riderPos);
+      }
     };
 
     setupRouteAndRider();
@@ -631,6 +808,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     isMapLoaded,
     isDedicatedTracking,
     riderProgressPercent,
+    liveDriverLocation,
+    autoFollowVehicle,
     supplierCoords.lng,
     supplierCoords.lat,
     customerCoords.lng,
@@ -724,25 +903,32 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       mapboxCustomerMarkerRef.current.remove();
     }
 
-    const isOutOfZone = coverageResult && !coverageResult.isCovered;
-    const pinColor = isOutOfZone ? '#dc2626' : '#14532d';
+    let el: HTMLDivElement;
 
-    const el = document.createElement('div');
-    el.className = 'ooh-gas-customer-marker cursor-grab active:cursor-grabbing animate-marker-pop';
-    el.innerHTML = `
-      <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
-        <div style="background-color: ${pinColor}; border: 2.5px solid #ffffff; width: 34px; height: 34px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3); transition: background-color 0.2s;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-            <circle cx="12" cy="10" r="3"/>
-          </svg>
+    if (isDedicatedTracking) {
+      const destinationLabel =
+        activeOrder?.destination.building ||
+        activeOrder?.destination.estate?.split(',')[0] ||
+        'Delivery Destination';
+      el = createUberDestinationMarkerElement(destinationLabel);
+    } else {
+      const isOutOfZone = coverageResult && !coverageResult.isCovered;
+      const dotColor = isOutOfZone ? '#dc2626' : '#2563EB';
+
+      el = document.createElement('div');
+      el.className = 'ooh-gas-customer-marker cursor-grab active:cursor-grabbing animate-marker-pop';
+      el.innerHTML = `
+        <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+          <div style="position: absolute; inset: 4px; border-radius: 9999px; background: ${
+            isOutOfZone ? 'rgba(220,38,38,0.12)' : 'rgba(37, 99, 235, 0.14)'
+          };"></div>
+          <div style="position: absolute; inset: 14px; border-radius: 9999px; background: ${
+            isOutOfZone ? 'rgba(220,38,38,0.24)' : 'rgba(37, 99, 235, 0.24)'
+          };"></div>
+          <div style="position: relative; background-color: ${dotColor}; border: 3.5px solid #ffffff; width: 22px; height: 22px; border-radius: 9999px; box-shadow: 0 3px 10px rgba(37,99,235,0.45);"></div>
         </div>
-        <div style="width: 8px; height: 4px; background: rgba(0,0,0,0.25); border-radius: 9999px; margin-top: 2px;"></div>
-        <div style="position: absolute; top: -20px; white-space: nowrap; background: #ffffff; color: ${pinColor}; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 6px; border: 1px solid #cbd5e1; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          ${isOutOfZone ? 'No Coverage' : 'Delivery Pin'}
-        </div>
-      </div>
-    `;
+      `;
+    }
 
     const marker = new mapboxgl.Marker({
       element: el,
@@ -1005,21 +1191,82 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       const isServing = hasLocationSelection ? eligibleSupplierIds.has(sup.id) : true;
       const isOutOfArea = hasLocationSelection ? !eligibleSupplierIds.has(sup.id) : false;
 
-      const depotEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, hasLocationSelection);
+      const depotEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, !isDedicatedTracking);
       const popupHtml = createSupplierPopupHtml(sup, isServing, isOutOfArea, hasLocationSelection);
 
-      const popup = new mapboxgl.Popup({ offset: 24, closeButton: true, maxWidth: '260px' }).setHTML(
-        popupHtml
-      );
+      if (onSelectSupplierPin) {
+        depotEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onSelectSupplierPin(sup);
+        });
+      }
 
-      const depotMarker = new mapboxgl.Marker({ element: depotEl })
-        .setLngLat([lng, lat])
-        .setPopup(popup)
-        .addTo(map);
+      const depotMarker = new mapboxgl.Marker({ element: depotEl, anchor: 'bottom-left' })
+        .setLngLat([lng, lat]);
 
+      if (!onSelectSupplierPin) {
+        const popup = new mapboxgl.Popup({ offset: 24, closeButton: true, maxWidth: '260px' }).setHTML(
+          popupHtml
+        );
+        depotMarker.setPopup(popup);
+      }
+
+      depotMarker.addTo(map);
       mapboxSupplierMarkersRef.current.push(depotMarker);
     });
-  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult]);
+  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult, onSelectSupplierPin]);
+
+  // Mapbox GL: Available Delivery Motorcycles around customer location on Home map
+  useEffect(() => {
+    if (engine !== 'mapbox-gl' || !mapboxMapRef.current || !isMapLoaded) return;
+    const map = mapboxMapRef.current;
+
+    mapboxIdleRidersRef.current.forEach((m) => m.remove());
+    mapboxIdleRidersRef.current = [];
+
+    if (isDedicatedTracking || riders.length === 0) return;
+
+    const offsets: Array<[number, number, number]> = [
+      [0.0022, -0.0026, 45],
+      [-0.0028, 0.0038, 210],
+      [0.0034, 0.0029, 315],
+    ];
+
+    riders.slice(0, 4).forEach((rider, idx) => {
+      const [dLat, dLng, heading] = offsets[idx % offsets.length];
+      const lat = rider.coordinates?.lat ?? customerCoords.lat + dLat;
+      const lng = rider.coordinates?.lng ?? customerCoords.lng + dLng;
+
+      const statusText = idx === 1 ? 'On the way' : undefined;
+      const riderEl = createRealisticMotorbikeMarkerElement(heading, null, false, statusText);
+      riderEl.style.pointerEvents = 'auto';
+      riderEl.style.cursor = 'pointer';
+
+      if (onSelectRiderPin) {
+        riderEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onSelectRiderPin(rider);
+        });
+      }
+
+      const marker = new mapboxgl.Marker({ element: riderEl, anchor: 'center' })
+        .setLngLat([lng, lat]);
+
+      if (!onSelectRiderPin) {
+        const popup = new mapboxgl.Popup({ offset: 20, closeButton: true, maxWidth: '220px' }).setHTML(
+          `<div style="padding:8px 10px;font-family:sans-serif;font-size:11px;min-width:165px;">
+            <strong style="color:#15191C;display:block;font-size:12px;">${rider.name}</strong>
+            <span style="color:#226946;font-weight:700;">Available Nearby · ★ ${rider.rating}</span><br/>
+            <span style="color:#6B7280;">${rider.vehicleModel} · ${rider.plateNumber}</span>
+          </div>`
+        );
+        marker.setPopup(popup);
+      }
+
+      marker.addTo(map);
+      mapboxIdleRidersRef.current.push(marker);
+    });
+  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng, onSelectRiderPin]);
 
   // Mapbox GL: Interactive Admin Polygon Vertex Handles
   useEffect(() => {
@@ -1063,6 +1310,36 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     };
   }, [engine, isMapLoaded, adminEditingZone, editedPolygon]);
 
+  // Helper: compute geographical bearing between two [lng, lat] points
+  const calculateBearing = (start: [number, number], end: [number, number]): number => {
+    const startLng = (start[0] * Math.PI) / 180;
+    const startLat = (start[1] * Math.PI) / 180;
+    const endLng = (end[0] * Math.PI) / 180;
+    const endLat = (end[1] * Math.PI) / 180;
+
+    const dLng = endLng - startLng;
+    const y = Math.sin(dLng) * Math.cos(endLat);
+    const x =
+      Math.cos(startLat) * Math.sin(endLat) -
+      Math.sin(startLat) * Math.cos(endLat) * Math.cos(dLng);
+    const brng = (Math.atan2(y, x) * 180) / Math.PI;
+    return (brng + 360) % 360;
+  };
+
+  // Helper: estimate distance in meters between two [lng, lat] points
+  const getDistanceMeters = (p1: [number, number], p2: [number, number]): number => {
+    const R = 6371000;
+    const dLat = ((p2[1] - p1[1]) * Math.PI) / 180;
+    const dLng = ((p2[0] - p1[0]) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((p1[1] * Math.PI) / 180) *
+        Math.cos((p2[1] * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
+
   // Mapbox GL: Route and rider marker
   const addTrackingRoute = async (map: mapboxgl.Map) => {
     const origin: [number, number] = [supplierCoords.lng, supplierCoords.lat];
@@ -1070,6 +1347,15 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
     const routeData = await getDirectionsRoute(origin, destination, activeToken);
     const coordinates = routeData?.coordinates || [origin, destination];
+    currentRouteCoordsRef.current = coordinates;
+
+    if (routeData) {
+      setDriverRouteInfo({ distanceKm: routeData.distanceKm, durationMin: routeData.durationMin });
+      onDriverTelemetryUpdated?.({
+        distanceRemainingKm: routeData.distanceKm,
+        etaMinutes: routeData.durationMin,
+      });
+    }
 
     if (map.getSource('tracking-route')) {
       (map.getSource('tracking-route') as mapboxgl.GeoJSONSource).setData({
@@ -1093,20 +1379,22 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         },
       });
 
+      // Dark contrast undercasing for clear road visibility
       map.addLayer({
         id: 'tracking-route-casing',
         type: 'line',
         source: 'tracking-route',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#064e3b', 'line-width': 6, 'line-opacity': 0.8 },
+        paint: { 'line-color': '#064e3b', 'line-width': 7, 'line-opacity': 0.85 },
       });
 
+      // Uber-style vibrant neon emerald road route
       map.addLayer({
         id: 'tracking-route-line',
         type: 'line',
         source: 'tracking-route',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#10b981', 'line-width': 4 },
+        paint: { 'line-color': '#10b981', 'line-width': 4.5 },
       });
     }
 
@@ -1119,40 +1407,156 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   };
 
   const updateMapboxRiderMarker = (map: mapboxgl.Map, coordinates: [number, number][]) => {
-    if (mapboxRiderMarkerRef.current) {
-      mapboxRiderMarkerRef.current.remove();
+    let riderPos: [number, number];
+    let heading = riderHeadingRef.current;
+    let speedKmH = 24;
+    let isLiveGps = false;
+
+    if (liveDriverLocation && !isNaN(liveDriverLocation.latitude) && !isNaN(liveDriverLocation.longitude)) {
+      // Validate GPS accuracy (< 100m) to reject erratic jumps
+      const newPos: [number, number] = [liveDriverLocation.longitude, liveDriverLocation.latitude];
+      if (liveDriverLocation.accuracy > 120 && currentRiderPosRef.current) {
+        const dist = getDistanceMeters(currentRiderPosRef.current, newPos);
+        // If accuracy is poor (>120m) and jumped excessively (>300m), retain last reliable position
+        if (dist > 300) {
+          riderPos = currentRiderPosRef.current;
+        } else {
+          riderPos = newPos;
+        }
+      } else {
+        riderPos = newPos;
+      }
+
+      isLiveGps = true;
+      speedKmH = liveDriverLocation.speed != null ? Math.round(liveDriverLocation.speed * 3.6) : 22;
+
+      // Real heading from device compass / telemetry
+      if (
+        liveDriverLocation.heading != null &&
+        !isNaN(liveDriverLocation.heading) &&
+        liveDriverLocation.heading >= 0
+      ) {
+        heading = liveDriverLocation.heading;
+      } else if (currentRiderPosRef.current) {
+        const distMoved = getDistanceMeters(currentRiderPosRef.current, riderPos);
+        if (distMoved > 3) {
+          heading = calculateBearing(currentRiderPosRef.current, riderPos);
+        }
+      }
+    } else {
+      // Fallback: interpolate along actual road route
+      const coords = coordinates.length > 0 ? coordinates : currentRouteCoordsRef.current;
+      if (coords.length > 0) {
+        const t = Math.min(100, Math.max(0, riderProgressPercent)) / 100;
+        const index = Math.min(coords.length - 1, Math.floor(t * (coords.length - 1)));
+        riderPos = coords[index] || coords[0];
+
+        // Heading along current road segment
+        const nextIndex = Math.min(coords.length - 1, index + 1);
+        if (nextIndex > index) {
+          heading = calculateBearing(coords[index], coords[nextIndex]);
+        }
+      } else {
+        riderPos = [supplierCoords.lng, supplierCoords.lat];
+      }
     }
 
-    const t = Math.min(100, Math.max(0, riderProgressPercent)) / 100;
-    const index = Math.min(coordinates.length - 1, Math.floor(t * (coordinates.length - 1)));
-    const riderPos = coordinates[index] || coordinates[0];
+    currentRiderPosRef.current = riderPos;
+    riderHeadingRef.current = heading;
 
-    const riderEl = document.createElement('div');
-    riderEl.className = 'ooh-gas-rider-marker';
-    riderEl.innerHTML = `
-      <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
-        <div style="position: absolute; width: 44px; height: 44px; border-radius: 9999px; background: rgba(16,185,129,0.3); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-        <div style="background-color: #0f172a; border: 2.5px solid #10b981; width: 34px; height: 34px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 2;">
-          <span style="font-size: 15px;">🛵</span>
-        </div>
-        <div style="margin-top: 2px; background: #0f172a; color: #10b981; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; border: 1px solid #10b981; white-space: nowrap; z-index: 2;">
-          Rider En Route
-        </div>
-      </div>
-    `;
+    // Update or create Realistic Motorbike Marker element
+    if (mapboxRiderMarkerRef.current) {
+      mapboxRiderMarkerRef.current.setLngLat(riderPos);
 
-    const marker = new mapboxgl.Marker({ element: riderEl })
-      .setLngLat(riderPos)
-      .addTo(map);
+      const el = mapboxRiderMarkerRef.current.getElement();
+      const bodyEl = el.querySelector<HTMLElement>('.uber-vehicle-body');
+      if (bodyEl) {
+        bodyEl.style.transform = `rotate(${heading}deg)`;
+      }
 
-    mapboxRiderMarkerRef.current = marker;
+      const speedBadge = el.querySelector<HTMLElement>('.uber-speed-badge');
+      if (speedBadge) {
+        const label = speedKmH > 0 ? `${speedKmH} km/h` : 'Stopped';
+        speedBadge.innerHTML = `
+          <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${isLiveGps ? '#10b981' : '#a3e635'};"></span>
+          <span>${label}</span>
+        `;
+      }
+    } else {
+      const riderEl = createRealisticMotorbikeMarkerElement(heading, speedKmH, isLiveGps);
+      const marker = new mapboxgl.Marker({ element: riderEl, anchor: 'center' })
+        .setLngLat(riderPos)
+        .addTo(map);
+      mapboxRiderMarkerRef.current = marker;
+    }
+
+    // Auto-follow delivery vehicle: smoothly ease camera to vehicle
+    if (autoFollowVehicle) {
+      try {
+        map.easeTo({
+          center: riderPos,
+          duration: 750,
+          essential: false,
+        });
+      } catch {
+        // Safe fallback if map is transitioning
+      }
+    }
+
+    // Recalculate road route and ETA when vehicle has moved significantly
+    if (isLiveGps) {
+      const now = Date.now();
+      const prevRouted = lastReroutedPosRef.current;
+      const distSinceReroute = prevRouted ? getDistanceMeters(prevRouted, riderPos) : 999;
+      const timeSinceReroute = now - lastReroutedTimeRef.current;
+
+      if (!prevRouted || distSinceReroute > 100 || timeSinceReroute > 25000) {
+        lastReroutedPosRef.current = riderPos;
+        lastReroutedTimeRef.current = now;
+
+        const dest: [number, number] = [customerCoords.lng, customerCoords.lat];
+        getDirectionsRoute(riderPos, dest, activeToken).then((updatedRoute) => {
+          if (updatedRoute && updatedRoute.coordinates.length > 0 && mapboxMapRef.current) {
+            currentRouteCoordsRef.current = updatedRoute.coordinates;
+            setDriverRouteInfo({
+              distanceKm: updatedRoute.distanceKm,
+              durationMin: updatedRoute.durationMin,
+            });
+            onDriverTelemetryUpdated?.({
+              distanceRemainingKm: updatedRoute.distanceKm,
+              etaMinutes: updatedRoute.durationMin,
+            });
+
+            const source = mapboxMapRef.current.getSource('tracking-route') as mapboxgl.GeoJSONSource | undefined;
+            if (source) {
+              source.setData({
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'LineString',
+                  coordinates: updatedRoute.coordinates,
+                },
+              });
+            }
+          }
+        });
+      }
+    }
   };
 
   useEffect(() => {
     if (engine === 'mapbox-gl' && isDedicatedTracking && mapboxMapRef.current && isMapLoaded) {
       addTrackingRoute(mapboxMapRef.current);
     }
-  }, [engine, riderProgressPercent, isDedicatedTracking, isMapLoaded]);
+  }, [engine, isDedicatedTracking, isMapLoaded]);
+
+  // Sync rider position whenever riderProgressPercent or liveDriverLocation changes
+  useEffect(() => {
+    if (engine === 'mapbox-gl' && isDedicatedTracking && mapboxMapRef.current && isMapLoaded) {
+      updateMapboxRiderMarker(mapboxMapRef.current, currentRouteCoordsRef.current);
+    }
+  }, [engine, riderProgressPercent, liveDriverLocation, isDedicatedTracking, isMapLoaded, autoFollowVehicle]);
+
 
   // ==========================================
   // GPS "Use My Current Location" Handler
@@ -1290,17 +1694,21 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
   return (
     <div
-      className={`relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 shadow-xs transition-all duration-300 text-left ${
+      className={`relative w-full overflow-hidden bg-[#EEF2EE] transition-all duration-300 text-left ${
         isFullscreen
-          ? 'fixed inset-4 z-50 h-[calc(100vh-2rem)] max-w-5xl mx-auto shadow-2xl border-emerald-600'
-          : isDedicatedTracking
-          ? 'h-[280px] sm:h-[340px]'
-          : 'h-[185px] min-[360px]:h-[205px] sm:h-[235px]'
+          ? 'fixed inset-4 z-50 h-[calc(100vh-2rem)] max-w-5xl mx-auto rounded-2xl shadow-2xl border border-black'
+          : isHomeHero
+          ? `rounded-none lg:rounded-3xl lg:border lg:border-neutral-200/90 ${
+              heightClassName || 'h-[66dvh] min-h-[430px] lg:h-[580px]'
+            }`
+          : `rounded-2xl border border-neutral-200/90 shadow-sm ${
+              heightClassName || (isDedicatedTracking ? 'h-[300px] sm:h-[360px]' : 'h-[260px] sm:h-[320px]')
+            }`
       }`}
     >
       {/* Top Floating Admin Boundary Editor Bar */}
       {adminEditingZone && (
-        <div className="absolute top-2.5 left-2.5 right-2.5 z-30 bg-slate-900/95 text-white px-3 py-2 rounded-xl shadow-xl flex items-center justify-between gap-2 backdrop-blur-md animate-in fade-in">
+        <div className="absolute top-2.5 left-2.5 right-2.5 z-30 bg-neutral-900/95 text-white px-3 py-2 rounded-xl shadow-xl flex items-center justify-between gap-2 backdrop-blur-md animate-in fade-in">
           <div className="flex items-center gap-2 min-w-0">
             <span
               className="w-3 h-3 rounded-full shrink-0 border border-white"
@@ -1320,7 +1728,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
             <button
               type="button"
               onClick={() => setAdminEditingZone(null)}
-              className="px-2.5 py-1 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+              className="px-2.5 py-1 text-neutral-300 hover:text-white text-xs font-semibold cursor-pointer"
             >
               Cancel
             </button>
@@ -1328,12 +1736,12 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
               type="button"
               onClick={handleSaveMapPolygonChanges}
               disabled={isSavingPolygon}
-              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+              className="px-3 py-1 bg-black hover:bg-neutral-800 text-white text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
             >
               {isSavingPolygon ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Save className="w-3.5 h-3.5" />
+                <Save className="w-3.5 h-3.5 text-emerald-400" />
               )}
               <span>Save Boundary</span>
             </button>
@@ -1341,118 +1749,142 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         </div>
       )}
 
-      {/* Search & Location Bar (Overlay on Map) */}
-      {!isDedicatedTracking && !adminEditingZone && (
-        <div className="absolute top-2.5 left-2.5 right-2.5 z-20 flex flex-col gap-1.5 pointer-events-auto">
-          <div className="flex items-center gap-1.5">
-            {/* Search Input Box */}
-            <div className="relative flex-1">
-              <div className="flex items-center bg-white/95 backdrop-blur-md rounded-xl border border-slate-200 shadow-md px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-[#14532d]">
-                <Search className="w-4 h-4 text-slate-400 shrink-0 mr-1.5" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setIsSearchOpen(true);
-                  }}
-                  onFocus={() => setIsSearchOpen(true)}
-                  placeholder="Search estate, street, or building in Kenya..."
-                  className="w-full bg-transparent text-xs text-slate-800 placeholder-slate-400 focus:outline-none"
-                />
-                {isSearching ? (
-                  <Loader2 className="w-3.5 h-3.5 text-emerald-600 animate-spin shrink-0" />
-                ) : searchQuery ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setSearchResults([]);
-                    }}
-                    className="p-0.5 text-slate-400 hover:text-slate-600"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                ) : null}
+      {/* Uber Dedicated Live Driver Tracking Floating Control Bar */}
+      {isDedicatedTracking && (
+        <div className="absolute top-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2 pointer-events-none">
+          <div className="pointer-events-auto bg-black/90 backdrop-blur-md text-white rounded-xl px-3 py-1.5 border border-neutral-700/80 shadow-xl flex items-center gap-2 max-w-[calc(100%-110px)] truncate">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                liveDriverLocation ? 'bg-emerald-400 animate-pulse' : 'bg-lime-400'
+              }`}
+            />
+            <div className="min-w-0 leading-tight">
+              <div className="text-[11px] font-extrabold text-white truncate flex items-center gap-1.5">
+                <span>
+                  {driverRouteInfo
+                    ? `~${driverRouteInfo.durationMin} min remaining`
+                    : `Driver en route`}
+                </span>
+                <span className="text-neutral-400 font-normal">·</span>
+                <span className="text-emerald-400 font-bold">
+                  {driverRouteInfo ? `${driverRouteInfo.distanceKm} km` : 'Road route'}
+                </span>
               </div>
-
-              {/* Autocomplete Dropdown */}
-              {isSearchOpen && searchResults.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl overflow-hidden max-h-52 overflow-y-auto z-30 animate-in fade-in-50">
-                  <div className="px-2.5 py-1 bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Kenya Places
-                  </div>
-                  {searchResults.map((place) => (
-                    <button
-                      key={place.id}
-                      type="button"
-                      onClick={() => handleSelectSearchResult(place)}
-                      className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-50/70 border-b border-slate-100 last:border-0 flex items-start gap-2 transition-colors cursor-pointer"
-                    >
-                      <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
-                      <div className="min-w-0">
-                        <div className="font-semibold text-slate-800 truncate">{place.name}</div>
-                        <div className="text-[10px] text-slate-500 truncate">{place.area}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="text-[9.5px] text-neutral-300 truncate">
+                {liveDriverLocation
+                  ? `Live GPS ±${Math.round(liveDriverLocation.accuracy)}m · ${
+                      liveDriverLocation.speed ? Math.round(liveDriverLocation.speed * 3.6) : 0
+                    } km/h`
+                  : 'Road telemetry synchronized'}
+              </div>
             </div>
-
-            {/* GPS My Location Button */}
-            <button
-              type="button"
-              onClick={handleUseCurrentLocation}
-              disabled={isLocatingUser}
-              title="Use current GPS location"
-              className="h-8 px-2.5 bg-white/95 backdrop-blur-md rounded-xl border border-slate-200 shadow-md text-emerald-800 hover:bg-emerald-50 active:scale-95 flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer shrink-0"
-            >
-              {isLocatingUser ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
-              ) : (
-                <Navigation className="w-3.5 h-3.5 text-[#14532d]" />
-              )}
-              <span className="hidden sm:inline">GPS</span>
-            </button>
           </div>
 
-          {/* Live Delivery Zone Coverage Status Pill */}
-          {!isDedicatedTracking && (
-            <div className="flex items-center gap-1.5 animate-in fade-in">
-              {isCoverageLoading ? (
-                <div className="bg-slate-900/85 backdrop-blur-md text-white text-[10px] font-semibold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm">
-                  <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
-                  <span>Verifying delivery zone coverage...</span>
-                </div>
-              ) : coverageResult?.isCovered ? (
-                <div className="bg-[#064e3b]/95 backdrop-blur-md text-white text-[10.5px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm border border-emerald-500/40 truncate max-w-full">
-                  <Check className="w-3.5 h-3.5 text-lime-400 shrink-0" />
-                  <span className="truncate">
-                    {coverageResult.primaryZone?.name} · {coverageResult.eligibleSuppliers.length} Depots Serving You
-                  </span>
-                </div>
-              ) : coverageResult && !coverageResult.isCovered ? (
-                <div className="bg-rose-900/95 backdrop-blur-md text-white text-[10.5px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm border border-rose-500/40 truncate max-w-full">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  <span className="truncate">
-                    Delivery unavailable at this location. Pin inside an active zone.
-                  </span>
-                </div>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !autoFollowVehicle;
+              setAutoFollowVehicle(next);
+              if (currentRiderPosRef.current && mapboxMapRef.current) {
+                mapboxMapRef.current.easeTo({
+                  center: currentRiderPosRef.current,
+                  zoom: 16,
+                  duration: 600,
+                });
+              }
+            }}
+            className={`pointer-events-auto px-2.5 py-1.5 rounded-xl border text-[11px] font-bold shadow-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+              autoFollowVehicle
+                ? 'bg-emerald-600 text-white border-emerald-500 hover:bg-emerald-500 ring-2 ring-emerald-400/30'
+                : 'bg-white/95 text-neutral-900 border-neutral-200 hover:bg-neutral-100'
+            }`}
+          >
+            <Navigation
+              className={`w-3.5 h-3.5 ${autoFollowVehicle ? 'text-white' : 'text-neutral-700'}`}
+            />
+            <span>{autoFollowVehicle ? 'Following' : 'Follow'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Top Floating Search Bar ("Search for gas...") matching Reference */}
+      {!isDedicatedTracking && !adminEditingZone && !hideSearchOverlay && (
+        <div className="absolute top-3 left-3 right-3 z-20 flex flex-col gap-1.5 pointer-events-auto">
+          <div className="relative">
+            <div className="flex items-center bg-white/98 backdrop-blur-md rounded-full border border-neutral-200/70 shadow-lg px-4 py-2.5 focus-within:ring-2 focus-within:ring-[#226946]">
+              <Search className="w-4.5 h-4.5 text-neutral-400 shrink-0 mr-2.5" />
+              <input
+                type="text"
+                value={effectiveSearchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setIsSearchOpen(true);
+                }}
+                onFocus={() => setIsSearchOpen(true)}
+                placeholder="Search for gas or area..."
+                className="w-full bg-transparent text-sm text-[#15191C] placeholder-neutral-400 font-medium focus:outline-none"
+              />
+              {isSearching ? (
+                <Loader2 className="w-4 h-4 text-[#226946] animate-spin shrink-0" />
+              ) : effectiveSearchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSearchResults([]);
+                    setIsSearchOpen(false);
+                  }}
+                  className="p-0.5 text-neutral-400 hover:text-neutral-700 cursor-pointer"
+                  aria-label="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               ) : null}
+            </div>
+
+            {/* Area / Address Suggestions Dropdown */}
+            {isSearchOpen && searchResults.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-2xl border border-neutral-200 shadow-xl overflow-hidden max-h-52 overflow-y-auto z-30 animate-in fade-in-50">
+                <div className="px-3.5 py-1.5 bg-[#F6F7F8] border-b border-neutral-100 text-[10px] font-bold text-[#6B7280] uppercase tracking-wider">
+                  Nairobi Delivery Locations
+                </div>
+                {searchResults.map((place) => (
+                  <button
+                    key={place.id}
+                    type="button"
+                    onClick={() => handleSelectSearchResult(place)}
+                    className="w-full text-left px-3.5 py-2.5 text-xs hover:bg-[#EDF6F1] border-b border-neutral-100 last:border-0 flex items-start gap-2.5 transition-colors cursor-pointer"
+                  >
+                    <MapPin className="w-4 h-4 text-[#226946] shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-[#15191C] truncate">{place.name}</div>
+                      <div className="text-[11px] text-[#6B7280] truncate">{place.area}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Out-of-coverage warning or active GPS toast */}
+          {coverageResult && !coverageResult.isCovered && (
+            <div className="bg-rose-900/95 backdrop-blur-md text-white text-[11px] font-bold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-sm">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span className="truncate">
+                Outside active zone. Tap an area above or drag your pin.
+              </span>
             </div>
           )}
 
-          {/* GPS Message Banner */}
           {gpsStatusMessage && (
-            <div className="bg-slate-900/90 text-white text-[11px] px-3 py-1.5 rounded-lg shadow-md backdrop-blur-xs flex items-center justify-between animate-in fade-in">
+            <div className="bg-neutral-900/90 text-white text-[11px] px-3 py-1.5 rounded-xl shadow-md backdrop-blur-xs flex items-center justify-between animate-in fade-in">
               <span>{gpsStatusMessage}</span>
               <button
                 type="button"
                 onClick={() => setGpsStatusMessage(null)}
-                className="text-slate-400 hover:text-white ml-2"
+                className="text-neutral-400 hover:text-white ml-2 cursor-pointer"
               >
-                <X className="w-3 h-3" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
@@ -1462,115 +1894,178 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       {/* Map Canvas Container */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 
-      {/* Bottom Floating Delivery Info Pill */}
-      <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between pointer-events-none gap-2">
-        <div className="pointer-events-auto bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-slate-200 shadow-md flex items-center gap-2 max-w-[calc(100%-140px)] truncate">
-          <div
-            className={`w-2 h-2 rounded-full shrink-0 ${
-              coverageResult && !coverageResult.isCovered
-                ? 'bg-rose-500'
-                : 'bg-emerald-500 animate-pulse'
-            }`}
-          />
-          <div className="text-[11px] leading-tight truncate">
-            <span className="font-bold text-slate-900 truncate block">
-              {currentLocation.name.split(',')[0]}
-            </span>
-            <span
-              className={`text-[10px] truncate block ${
-                coverageResult && !coverageResult.isCovered
-                  ? 'text-rose-600 font-bold'
-                  : 'text-slate-500'
-              }`}
+      {/* Floating Circular Controls Bottom-Right (Current Location + Map Layers) matching Reference */}
+      <div
+        className={`absolute right-3 z-20 flex flex-col items-end gap-2.5 pointer-events-auto ${
+          isHomeHero ? 'bottom-9 lg:bottom-5' : 'bottom-12'
+        }`}
+      >
+        {/* Expandable Layers & Map Tools Popover */}
+        {isLayersMenuOpen && (
+          <div className="bg-white rounded-2xl border border-neutral-200 shadow-2xl p-2.5 w-52 space-y-1.5 text-xs animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between px-1 pb-1 border-b border-neutral-100">
+              <span className="font-extrabold text-[#15191C]">Map Layers</span>
+              <button
+                type="button"
+                onClick={() => setIsLayersMenuOpen(false)}
+                className="text-neutral-400 hover:text-neutral-700 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onClick={() => setMapStyle('streets')}
+                className={`py-1.5 px-2 rounded-xl font-bold cursor-pointer ${
+                  mapStyle === 'streets'
+                    ? 'bg-[#226946] text-white'
+                    : 'bg-[#F6F7F8] text-[#15191C]'
+                }`}
+              >
+                Road Map
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapStyle('light')}
+                className={`py-1.5 px-2 rounded-xl font-bold cursor-pointer ${
+                  mapStyle === 'light'
+                    ? 'bg-[#226946] text-white'
+                    : 'bg-[#F6F7F8] text-[#15191C]'
+                }`}
+              >
+                Minimal
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowZonesOverlay((p) => !p)}
+              className="w-full py-1.5 px-2.5 rounded-xl bg-[#F6F7F8] hover:bg-[#EDF6F1] text-[#15191C] font-semibold flex items-center justify-between cursor-pointer"
             >
-              {isGeocoding
-                ? 'Updating address...'
-                : coverageResult && !coverageResult.isCovered
-                ? 'Outside delivery zones'
-                : 'Drag pin to exact gate'}
-            </span>
+              <span>Delivery Zones</span>
+              <span className="font-bold text-[#226946]">{showZonesOverlay ? 'ON' : 'OFF'}</span>
+            </button>
+
+            <div className="grid grid-cols-3 gap-1 pt-0.5">
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleResetNorth}
+                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
+                title="Re-center Pin"
+              >
+                <Compass className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1 pt-0.5 border-t border-neutral-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLayersMenuOpen(false);
+                  setIsAdminModalOpen(true);
+                }}
+                className="flex-1 py-1.5 rounded-xl hover:bg-[#EDF6F1] text-[#226946] font-bold flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Shield className="w-3 h-3" />
+                <span>Zones</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLayersMenuOpen(false);
+                  setIsTokenModalOpen(true);
+                }}
+                className="flex-1 py-1.5 rounded-xl hover:bg-[#F6F7F8] text-[#6B7280] font-bold flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Key className="w-3 h-3" />
+                <span>API Key</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Circular Current Location GPS Button */}
+        <button
+          type="button"
+          onClick={handleUseCurrentLocation}
+          disabled={isLocatingUser}
+          aria-label="Center on my current GPS location"
+          title="Center on my current location"
+          className="w-11 h-11 rounded-full bg-white hover:bg-[#F6F7F8] active:scale-95 text-[#15191C] shadow-lg border border-neutral-200/70 flex items-center justify-center cursor-pointer transition-all"
+        >
+          {isLocatingUser ? (
+            <Loader2 className="w-5 h-5 animate-spin text-[#226946]" />
+          ) : (
+            <LocateFixed className="w-5 h-5 text-[#15191C]" />
+          )}
+        </button>
+
+        {/* Circular Map Layers Button */}
+        <button
+          type="button"
+          onClick={() => setIsLayersMenuOpen((o) => !o)}
+          aria-label="Map layers and zoom controls"
+          title="Map layers"
+          className={`w-11 h-11 rounded-full shadow-lg border flex items-center justify-center cursor-pointer transition-all active:scale-95 ${
+            isLayersMenuOpen
+              ? 'bg-[#226946] text-white border-[#226946]'
+              : 'bg-white hover:bg-[#F6F7F8] text-[#15191C] border-neutral-200/70'
+          }`}
+        >
+          <Layers className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Subtle Bottom-Left Current Pinned Area Badge (Hidden on compact Hero if clean, visible otherwise) */}
+      {!isHomeHero && (
+        <div className="pointer-events-none absolute bottom-2.5 left-2.5 z-10 max-w-[calc(100%-80px)]">
+          <div className="pointer-events-auto bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-neutral-200 shadow-md inline-flex items-center gap-2 truncate">
+            <div
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                coverageResult && !coverageResult.isCovered ? 'bg-rose-500' : 'bg-[#226946]'
+              }`}
+            />
+            <div className="text-[11px] leading-tight truncate">
+              <span className="font-bold text-slate-900 truncate block">
+                {currentLocation.name.split(',')[0]}
+              </span>
+              <span className="text-[10px] text-slate-500 truncate block">
+                {isGeocoding ? 'Updating address...' : 'Drag pin to exact gate'}
+              </span>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Right Action Controls */}
-        <div className="pointer-events-auto flex items-center gap-1">
-          {/* Delivery Zones Overlay Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowZonesOverlay((prev) => !prev)}
-            title={showZonesOverlay ? 'Hide Delivery Zones' : 'Show Delivery Zones'}
-            className={`w-7 h-7 backdrop-blur-md rounded-lg border shadow-md flex items-center justify-center text-[10px] font-bold cursor-pointer transition-colors ${
-              showZonesOverlay
-                ? 'bg-emerald-800 text-white border-emerald-900'
-                : 'bg-white/95 text-slate-600 border-slate-200 hover:text-slate-900'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Admin Delivery Zones Manager Button */}
-          <button
-            type="button"
-            onClick={() => setIsAdminModalOpen(true)}
-            title="Delivery Zone Admin Portal"
-            className="w-7 h-7 bg-white/95 hover:bg-emerald-50 backdrop-blur-md rounded-lg border border-slate-200 shadow-md text-emerald-800 flex items-center justify-center cursor-pointer transition-colors"
-          >
-            <Shield className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Fullscreen Toggle */}
-          <button
-            type="button"
-            onClick={() => setIsFullscreen((f) => !f)}
-            title={isFullscreen ? 'Exit full map' : 'Expand full map'}
-            className="w-7 h-7 bg-white/95 backdrop-blur-md rounded-lg border border-slate-200 shadow-md text-slate-600 hover:text-slate-900 flex items-center justify-center cursor-pointer transition-colors"
-          >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-          </button>
-
-          {/* Mapbox Token Settings Button */}
-          <button
-            type="button"
-            onClick={() => setIsTokenModalOpen(true)}
-            title="Configure Mapbox Token"
-            className={`w-7 h-7 rounded-lg border shadow-md flex items-center justify-center cursor-pointer transition-colors ${
-              activeToken
-                ? 'bg-white/95 text-emerald-800 border-slate-200 hover:bg-emerald-50'
-                : 'bg-amber-500 text-white border-amber-600 animate-bounce'
-            }`}
-          >
-            <Key className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Floating Zoom & Compass Controls (Top Right) */}
-      <div className="absolute top-12 sm:top-14 right-2.5 z-10 flex flex-col gap-1 pointer-events-auto">
+      {/* Expand/Collapse Fullscreen Control on Non-Hero Maps */}
+      {!isHomeHero && (
         <button
           type="button"
-          onClick={handleZoomIn}
-          className="w-7 h-7 bg-white/95 backdrop-blur-md rounded-lg border border-slate-200 shadow-md text-slate-700 hover:bg-slate-50 flex items-center justify-center cursor-pointer font-bold text-xs"
-          title="Zoom in"
+          onClick={() => setIsFullscreen((f) => !f)}
+          title={isFullscreen ? 'Exit full map' : 'Expand full map'}
+          className="absolute top-3 right-3 z-10 w-8 h-8 bg-white/95 backdrop-blur-md rounded-full border border-neutral-200 shadow-md text-neutral-700 flex items-center justify-center cursor-pointer"
         >
-          <ZoomIn className="w-3.5 h-3.5" />
+          {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
         </button>
-        <button
-          type="button"
-          onClick={handleZoomOut}
-          className="w-7 h-7 bg-white/95 backdrop-blur-md rounded-lg border border-slate-200 shadow-md text-slate-700 hover:bg-slate-50 flex items-center justify-center cursor-pointer font-bold text-xs"
-          title="Zoom out"
-        >
-          <ZoomOut className="w-3.5 h-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={handleResetNorth}
-          className="w-7 h-7 bg-white/95 backdrop-blur-md rounded-lg border border-slate-200 shadow-md text-slate-700 hover:bg-slate-50 flex items-center justify-center cursor-pointer text-xs"
-          title="Reset view"
-        >
-          <Compass className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      )}
 
       {/* Missing Token Banner Overlay when in Mapbox GL mode without token */}
       {engine === 'mapbox-gl' && !activeToken && (

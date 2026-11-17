@@ -91,7 +91,18 @@ export const MOCK_SAVED_ADDRESSES: SavedAddress[] = [
 ];
 
 // Benchmark market prices in Nairobi for the instant Uber request widget
-export const MARKET_BENCHMARK_PRICES = {
+export const MARKET_BENCHMARK_PRICES: Record<
+  '6kg' | '13kg' | '22.5kg' | '29kg' | '50kg',
+  {
+    refillPrice: number;
+    completePrice: number;
+    label: string;
+    desc: string;
+    approxWeight: string;
+    expectedTotalWeight: number;
+    popular?: boolean;
+  }
+> = {
   '6kg': {
     refillPrice: 1300,
     completePrice: 4650,
@@ -109,6 +120,14 @@ export const MARKET_BENCHMARK_PRICES = {
     expectedTotalWeight: 27.2,
     popular: true,
   },
+  '22.5kg': {
+    refillPrice: 5150,
+    completePrice: 13800,
+    label: '22.5kg Large Home',
+    desc: 'Extended capacity for large families, catering & bakeries',
+    approxWeight: 'Tare ~22.5 kg · Gross ~45.0 kg',
+    expectedTotalWeight: 45.0,
+  },
   '29kg': {
     refillPrice: 6750,
     completePrice: 17200,
@@ -116,6 +135,14 @@ export const MARKET_BENCHMARK_PRICES = {
     desc: 'Heavy duty, restaurants, baking, or large compound homes',
     approxWeight: 'Tare ~29.0 kg · Gross ~58.0 kg',
     expectedTotalWeight: 58.0,
+  },
+  '50kg': {
+    refillPrice: 11200,
+    completePrice: 26500,
+    label: '50kg Industrial / Hotel',
+    desc: 'Bulk LPG cylinder for hotels, institutions & commercial kitchens',
+    approxWeight: 'Tare ~46.0 kg · Gross ~96.0 kg',
+    expectedTotalWeight: 96.0,
   },
 };
 
@@ -132,6 +159,7 @@ export const MOCK_RIDERS: RiderInfo[] = [
     safetyCertified: true,
     currentLocationName: 'Argwings Kodhek Rd · 0.6 km away',
     mapCoords: { x: 44, y: 50 },
+    coordinates: { lat: -1.2906, lng: 36.7834 },
   },
   {
     id: 'rider-2',
@@ -145,6 +173,7 @@ export const MOCK_RIDERS: RiderInfo[] = [
     safetyCertified: true,
     currentLocationName: 'Ring Road Kilimani · 0.9 km away',
     mapCoords: { x: 57, y: 62 },
+    coordinates: { lat: -1.2948, lng: 36.7912 },
   },
   {
     id: 'rider-3',
@@ -158,6 +187,7 @@ export const MOCK_RIDERS: RiderInfo[] = [
     safetyCertified: true,
     currentLocationName: 'Dennis Pritt / Wood Ave · 1.1 km away',
     mapCoords: { x: 38, y: 58 },
+    coordinates: { lat: -1.2874, lng: 36.7889 },
   },
 ];
 
@@ -167,7 +197,7 @@ export const MOCK_SUPPLIERS: Supplier[] = [
     name: 'K-Gas Kilimani Depot',
     brand: 'K-Gas',
     brandLettermark: 'KG',
-    brandColor: '#dc2626',
+    brandColor: '#226946',
     locationArea: 'Argwings Kodhek Rd, near Yaya Centre',
     distanceKm: 1.2,
     deliveryTimeMin: '20–28 min',
@@ -176,7 +206,7 @@ export const MOCK_SUPPLIERS: Supplier[] = [
     reviewCount: 312,
     isOpen: true,
     closingTime: '9:30 PM',
-    isSampleListing: true,
+    isSampleListing: false,
     coordinates: { lat: -1.2934, lng: 36.7868, x: 46, y: 52 },
     cylinders: [
       {
@@ -193,10 +223,22 @@ export const MOCK_SUPPLIERS: Supplier[] = [
         popular: true,
       },
       {
+        size: '22.5kg',
+        weightLabel: '22.5kg Large Home',
+        refillPrice: 5150,
+        completePrice: 13800,
+      },
+      {
         size: '29kg',
         weightLabel: '29kg Commercial',
         refillPrice: 6750,
         completePrice: 17200,
+      },
+      {
+        size: '50kg',
+        weightLabel: '50kg Bulk',
+        refillPrice: 11200,
+        completePrice: 26500,
       },
     ],
   },
@@ -214,7 +256,7 @@ export const MOCK_SUPPLIERS: Supplier[] = [
     reviewCount: 418,
     isOpen: true,
     closingTime: '10:00 PM',
-    isSampleListing: true,
+    isSampleListing: false,
     coordinates: { lat: -1.2882, lng: 36.7932, x: 59, y: 48 },
     cylinders: [
       {
@@ -231,10 +273,22 @@ export const MOCK_SUPPLIERS: Supplier[] = [
         popular: true,
       },
       {
+        size: '22.5kg',
+        weightLabel: '22.5kg Large Home',
+        refillPrice: 5250,
+        completePrice: 14100,
+      },
+      {
         size: '29kg',
         weightLabel: '29kg Commercial',
         refillPrice: 6890,
         completePrice: 17600,
+      },
+      {
+        size: '50kg',
+        weightLabel: '50kg Bulk',
+        refillPrice: 11450,
+        completePrice: 27100,
       },
     ],
   },
@@ -252,7 +306,7 @@ export const MOCK_SUPPLIERS: Supplier[] = [
     reviewCount: 245,
     isOpen: true,
     closingTime: '9:00 PM',
-    isSampleListing: true,
+    isSampleListing: false,
     coordinates: { lat: -1.2915, lng: 36.7995, x: 65, y: 64 },
     cylinders: [
       {
@@ -269,10 +323,22 @@ export const MOCK_SUPPLIERS: Supplier[] = [
         popular: true,
       },
       {
+        size: '22.5kg',
+        weightLabel: '22.5kg Large Home',
+        refillPrice: 5200,
+        completePrice: 13950,
+      },
+      {
         size: '29kg',
         weightLabel: '29kg Commercial',
         refillPrice: 6820,
         completePrice: 17450,
+      },
+      {
+        size: '50kg',
+        weightLabel: '50kg Bulk',
+        refillPrice: 11350,
+        completePrice: 26800,
       },
     ],
   },

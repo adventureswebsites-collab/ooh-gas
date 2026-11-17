@@ -31,11 +31,9 @@ export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
   customerSession,
   onRequestLogin,
 }) => {
-  if (!isOpen || !supplier) return null;
-
   const defaultSaved = MOCK_SAVED_ADDRESSES[0];
 
-  // Primary state for ordering flow
+  // Primary state for ordering flow (always called unconditionally at top of component)
   const [currentStep, setCurrentStep] = useState<OrderingStep>('cylinder');
   const [selectedSize, setSelectedSize] = useState<CylinderSize>(initialSize);
   const [purchaseType, setPurchaseType] = useState<PurchaseType>(initialPurchaseType);
@@ -61,7 +59,7 @@ export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
   // Timing state
   const [timingSelection, setTimingSelection] = useState<DeliveryTimingSelection>({
     type: 'asap',
-    asapEstimateWindow: `${supplier.deliveryTimeMin}`,
+    asapEstimateWindow: supplier?.deliveryTimeMin || '20–30 min',
     scheduledDate: '',
     scheduledDateFormatted: '',
     scheduledSlotId: '',
@@ -70,13 +68,19 @@ export const OrderFlowModal: React.FC<OrderFlowModalProps> = ({
 
   // Reset step if re-opened
   React.useEffect(() => {
-    if (isOpen) {
+    if (isOpen && supplier) {
       setSelectedSize(initialSize);
       setPurchaseType(initialPurchaseType);
       setCurrentStep('cylinder');
       setValidationErrors({});
+      setTimingSelection((prev) => ({
+        ...prev,
+        asapEstimateWindow: `${supplier.deliveryTimeMin}`,
+      }));
     }
-  }, [isOpen, initialSize, initialPurchaseType]);
+  }, [isOpen, initialSize, initialPurchaseType, supplier]);
+
+  if (!isOpen || !supplier) return null;
 
   // Validation function for Step 2
   const validateAddressStep = (): boolean => {

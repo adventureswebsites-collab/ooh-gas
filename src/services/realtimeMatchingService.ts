@@ -309,8 +309,12 @@ export async function createAndMatchOrder(
       basePrice = item.purchaseType === 'refill' ? 2850 : 6900;
     } else if (master.cylinderSize === '6kg') {
       basePrice = item.purchaseType === 'refill' ? 1300 : 3800;
+    } else if (master.cylinderSize === '22.5kg') {
+      basePrice = item.purchaseType === 'refill' ? 5150 : 13800;
     } else if (master.cylinderSize === '29kg') {
       basePrice = item.purchaseType === 'refill' ? 6500 : 14500;
+    } else if (master.cylinderSize === '50kg') {
+      basePrice = item.purchaseType === 'refill' ? 11200 : 26500;
     } else {
       basePrice = item.purchaseType === 'refill' ? 2000 : 5000;
     }

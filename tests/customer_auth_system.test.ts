@@ -228,7 +228,11 @@ async function runAuthTests() {
   console.log('============================================================\n');
 }
 
-runAuthTests().catch((err) => {
-  console.error('\n❌ Test suite failed:', err);
-  process.exit(1);
-});
+runAuthTests()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('\n❌ Test suite failed:', err);
+    process.exit(1);
+  });

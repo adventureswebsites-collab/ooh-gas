@@ -25,6 +25,8 @@ import {
   getOffersForSupplier,
   getMatchingSessionByOrderId,
   subscribeToRealtimeEvents,
+  recordDriverLocation,
+  getDriverLocationForOrder,
 } from './src/services/realtimeMatchingService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -648,6 +650,79 @@ async function startServer() {
       paymentMethod: order.paymentMethod,
     });
   });
+
+  // ==========================================
+  // Driver Live Tracking & Delivery Lifecycle Endpoints
+  // ==========================================
+
+  // Ingest driver real-time GPS location
+  app.post('/api/driver/location', (req: Request, res: Response) => {
+    const { driverId, orderId, latitude, longitude, accuracy, heading, speed } = req.body || {};
+
+    if (!orderId || !driverId || typeof latitude !== 'number' || typeof longitude !== 'number') {
+      return res.status(400).json({
+        recorded: false,
+        error: 'driverId, orderId, numeric latitude, and numeric longitude are required.',
+      });
+    }
+
+    const result = recordDriverLocation({
+      driverId,
+      orderId,
+      latitude,
+      longitude,
+      accuracy: typeof accuracy === 'number' ? accuracy : 10,
+      heading: typeof heading === 'number' ? heading : undefined,
+      speed: typeof speed === 'number' ? speed : undefined,
+    });
+
+    if (!result.recorded) {
+      return res.status(400).json(result);
+    }
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  });
+
+  // Query latest known driver location for order
+  app.get('/api/driver/orders/:orderId/location', (req: Request, res: Response) => {
+    const loc = getDriverLocationForOrder(req.params.orderId);
+    if (!loc) {
+      return res.status(404).json({ error: 'No live telemetry recorded yet for this order.' });
+    }
+    res.json(loc);
+  });
+
+  // Driver transitions delivery status
+  app.post('/api/driver/orders/:orderId/status', (req: Request, res: Response) => {
+    const { status, driverNotes } = req.body || {};
+    if (!status) {
+      return res.status(400).json({ error: 'Status is required.' });
+    }
+
+    const validStatuses = [
+      'DRIVER_ASSIGNED',
+      'DRIVER_HEADING_TO_SUPPLIER',
+      'ORDER_PICKED_UP',
+      'OUT_FOR_DELIVERY',
+      'DRIVER_NEARBY',
+      'DRIVER_ARRIVED',
+      'DELIVERED',
+    ];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        error: `Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`,
+      });
+    }
+
+    const result = updateOrderStage(req.params.orderId, status);
+    res.json({ ...result, driverNotes });
+  });
+
+  // ==========================================
   // Protected Admin Management Endpoints
   // ==========================================
 

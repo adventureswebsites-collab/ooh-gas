@@ -169,7 +169,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="px-5 pt-3.5 pb-2.5 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
           <div className="flex items-center gap-2">
             <OohGasLogo />
-            <span className="text-[10px] font-bold text-[#14532d] bg-[#f0fdf4] border border-[#bbf7d0] px-2 py-0.5 rounded-md tracking-wider uppercase">
+            <span className="text-[10px] font-bold text-[#226946] bg-[#f0fdf4] border border-[#bbf7d0] px-2 py-0.5 rounded-md tracking-wider uppercase">
               Customer Portal
             </span>
           </div>
@@ -186,7 +186,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Redirect Notice Banner (if prompted from checkout) */}
         {redirectReason && (
-          <div className="bg-[#f0fdf4] border-b border-[#bbf7d0] px-4 py-2 flex items-center gap-2 text-xs text-[#14532d] font-medium shrink-0">
+          <div className="bg-[#f0fdf4] border-b border-[#bbf7d0] px-4 py-2 flex items-center gap-2 text-xs text-[#226946] font-medium shrink-0">
             <ShieldCheck className="w-4 h-4 text-[#166534] shrink-0" />
             <span className="truncate">{redirectReason}</span>
           </div>
@@ -205,7 +205,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 }}
                 className={`py-2 rounded-lg transition-all cursor-pointer ${
                   mode === 'signin'
-                    ? 'bg-white text-[#14532d] shadow-xs'
+                    ? 'bg-white text-[#226946] shadow-xs'
                     : 'hover:text-slate-900'
                 }`}
               >
@@ -220,7 +220,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 }}
                 className={`py-2 rounded-lg transition-all cursor-pointer ${
                   mode === 'signup'
-                    ? 'bg-white text-[#14532d] shadow-xs'
+                    ? 'bg-white text-[#226946] shadow-xs'
                     : 'hover:text-slate-900'
                 }`}
               >
@@ -317,7 +317,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#14532d] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#226946] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
               >
                 {isLoading ? (
                   <>
@@ -338,7 +338,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   type="button"
                   onClick={handleQuickDemoLogin}
                   disabled={isLoading}
-                  className="w-full py-2 px-3 rounded-xl border border-dashed border-[#86efac] bg-[#f0fdf4] hover:bg-[#dcfce7] text-[#14532d] text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  className="w-full py-2 px-3 rounded-xl border border-dashed border-[#86efac] bg-[#f0fdf4] hover:bg-[#dcfce7] text-[#226946] text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Sparkles className="w-3.5 h-3.5 text-[#166534]" />
                   <span>1-Tap Demo Login (Wangari Mwangi)</span>
@@ -453,7 +453,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#14532d] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#226946] hover:bg-[#166534] active:bg-[#0f3d21] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
               >
                 {isLoading ? (
                   <>
@@ -497,7 +497,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       setMode('signin');
                       setResetSuccessMessage(null);
                     }}
-                    className="w-full py-2 rounded-xl bg-[#14532d] text-white text-xs font-bold hover:bg-[#166534] cursor-pointer"
+                    className="w-full py-2 rounded-xl bg-[#226946] text-white text-xs font-bold hover:bg-[#166534] cursor-pointer"
                   >
                     Return to Sign In
                   </button>
@@ -526,7 +526,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#14532d] hover:bg-[#166534] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
+                    className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-[#226946] hover:bg-[#166534] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer disabled:opacity-60"
                   >
                     {isLoading ? (
                       <>

@@ -27,5 +27,17 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
         persistSession: true,
         autoRefreshToken: true,
       },
+      global: {
+        fetch: (url, options) => {
+          if (!options?.signal) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 2500);
+            return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+              clearTimeout(timer)
+            );
+          }
+          return fetch(url, options);
+        },
+      },
     })
   : null;

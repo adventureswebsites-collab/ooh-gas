@@ -190,7 +190,7 @@ export const MatchingModal: React.FC<MatchingModalProps> = ({
                   onCancel();
                   if (onRetryDifferentLocation) onRetryDifferentLocation();
                 }}
-                className="w-full py-3 bg-[#14532d] hover:bg-[#166534] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3 bg-[#226946] hover:bg-[#166534] text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Try Another Location / Product</span>
@@ -212,7 +212,7 @@ export const MatchingModal: React.FC<MatchingModalProps> = ({
             <div className="relative w-28 h-28 mx-auto flex items-center justify-center">
               <span className="absolute w-28 h-28 rounded-full bg-[#166534]/15 animate-ping opacity-75" />
               <span className="absolute w-20 h-20 rounded-full bg-[#166534]/25 animate-pulse" />
-              <span className="absolute w-14 h-14 rounded-full bg-[#14532d] shadow-md flex items-center justify-center text-white">
+              <span className="absolute w-14 h-14 rounded-full bg-[#226946] shadow-md flex items-center justify-center text-white">
                 <Flame className="w-7 h-7 text-[#bef264] fill-[#bef264] animate-bounce" />
               </span>
               <span className="absolute -top-1 right-2 w-6 h-6 rounded-full bg-[#84cc16] border-2 border-white shadow-xs flex items-center justify-center text-[10px] text-emerald-950 font-bold animate-pulse">
@@ -263,7 +263,7 @@ export const MatchingModal: React.FC<MatchingModalProps> = ({
                 </div>
 
                 <div className="text-right shrink-0">
-                  <span className="font-mono text-base font-extrabold text-[#14532d] bg-white px-2 py-0.5 rounded border border-emerald-200">
+                  <span className="font-mono text-base font-extrabold text-[#226946] bg-white px-2 py-0.5 rounded border border-emerald-200">
                     {countdownSeconds}s
                   </span>
                 </div>

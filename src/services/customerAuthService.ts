@@ -257,15 +257,17 @@ if (typeof window !== 'undefined' && isSupabaseConfigured && supabase) {
 
       // Try fetching linked profile from public.profiles
       try {
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
+        if (supabase) {
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .single();
 
-        if (profileData) {
-          fullName = profileData.full_name || fullName;
-          phoneNumber = profileData.phone_number || phoneNumber;
+          if (profileData) {
+            fullName = profileData.full_name || fullName;
+            phoneNumber = profileData.phone_number || phoneNumber;
+          }
         }
       } catch (err) {
         console.warn('[CustomerAuth] Could not fetch profile on auth change:', err);
@@ -928,15 +930,17 @@ export async function getCustomerOrderHistory(customerId?: string): Promise<Mult
     }
   }
 
-  // Fetch from authoritative backend endpoint with customerId
-  try {
-    const res = await fetch(`/api/customer/orders?customerId=${encodeURIComponent(targetId)}`);
-    if (res.ok) {
-      const orders = await res.json();
-      return orders;
+  // Fetch from authoritative backend endpoint with customerId in browser
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`/api/customer/orders?customerId=${encodeURIComponent(targetId)}`);
+      if (res.ok) {
+        const orders = await res.json();
+        return orders;
+      }
+    } catch (err) {
+      console.warn('[CustomerAuth] Server orders fetch notice:', err);
     }
-  } catch (err) {
-    console.warn('[CustomerAuth] Server orders fetch notice:', err);
   }
 
   return [];
