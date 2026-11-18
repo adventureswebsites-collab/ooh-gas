@@ -177,3 +177,94 @@ export function filterQualifiedSuppliers(params: {
     message,
   };
 }
+
+export interface NearbyDepotMatch extends Supplier {
+  calculatedDistanceKm: number;
+  lowestRefillPrice: number;
+}
+
+export interface NearbyDepotSearchResult {
+  found: boolean;
+  isCovered: boolean;
+  primaryDepot: NearbyDepotMatch | null;
+  nearbyDepots: NearbyDepotMatch[];
+  statusMessage: string;
+}
+
+/**
+ * Finds and ranks open LPG gas depots serving the customer's entered location.
+ * Used as soon as a user enters or pins a location to highlight & pin the
+ * nearest delivery depot directly onto the map.
+ */
+export function findNearestDeliveryDepots(params: {
+  destination: NairobiLocation;
+  coverageResult: CoverageCheckResult | null;
+  suppliers: Supplier[];
+}): NearbyDepotSearchResult {
+  const { destination, coverageResult, suppliers } = params;
+
+  if (coverageResult && !coverageResult.isCovered) {
+    return {
+      found: false,
+      isCovered: false,
+      primaryDepot: null,
+      nearbyDepots: [],
+      statusMessage:
+        coverageResult.message ||
+        'No Ooh Gas delivery depot covers this location yet. Move the pin inside a green Nairobi zone.',
+    };
+  }
+
+  const pool =
+    coverageResult && coverageResult.eligibleSuppliers.length > 0
+      ? coverageResult.eligibleSuppliers
+      : suppliers;
+
+  const openDepots = pool.filter((s) => s.isOpen);
+  if (openDepots.length === 0) {
+    return {
+      found: false,
+      isCovered: true,
+      primaryDepot: null,
+      nearbyDepots: [],
+      statusMessage: 'All nearby gas stations are currently closed.',
+    };
+  }
+
+  const ranked: NearbyDepotMatch[] = openDepots
+    .map((shop) => {
+      const distKm = shop.coordinates
+        ? haversineDistanceKm(destination.coordinates, shop.coordinates)
+        : shop.distanceKm;
+
+      const inStockPrices = shop.cylinders
+        .filter((c) => c.inStock !== false)
+        .map((c) => c.refillPrice);
+      const lowestRefillPrice =
+        inStockPrices.length > 0
+          ? Math.min(...inStockPrices)
+          : MARKET_BENCHMARK_PRICES['6kg'].refillPrice;
+
+      return {
+        ...shop,
+        distanceKm: distKm,
+        calculatedDistanceKm: distKm,
+        lowestRefillPrice,
+      };
+    })
+    .sort((a, b) => a.calculatedDistanceKm - b.calculatedDistanceKm);
+
+  const primary = ranked[0] || null;
+  const areaLabel = coverageResult?.primaryZone?.name || destination.name.split(',')[0];
+
+  return {
+    found: Boolean(primary),
+    isCovered: true,
+    primaryDepot: primary,
+    nearbyDepots: ranked,
+    statusMessage: primary
+      ? `${ranked.length} nearby gas ${ranked.length === 1 ? 'depot' : 'depots'} found for ${areaLabel}`
+      : `No active gas depot found near ${areaLabel}.`,
+  };
+}
+

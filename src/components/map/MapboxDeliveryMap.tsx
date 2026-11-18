@@ -73,6 +73,8 @@ interface MapboxDeliveryMapProps {
   onDriverTelemetryUpdated?: (telemetry: { distanceRemainingKm: number; etaMinutes: number }) => void;
   heightClassName?: string;
   hideSearchOverlay?: boolean;
+  highlightedSupplierId?: string | null;
+  showPreviewConnection?: boolean;
 }
 
 // ==========================================
@@ -157,14 +159,15 @@ function createGasCylinderMarkerElement(
   sup: Supplier,
   isServing: boolean,
   isOutOfArea: boolean,
-  showCallout: boolean = true
+  showCallout: boolean = true,
+  isHighlighted: boolean = false
 ): HTMLDivElement {
   const container = document.createElement('div');
   container.className = `ooh-gas-depot-marker animate-marker-pop cursor-pointer ${
-    isOutOfArea ? 'opacity-60 z-10' : 'z-20'
+    isOutOfArea ? 'opacity-55 z-10' : isHighlighted ? 'z-30' : 'z-20'
   }`;
 
-  const pinBg = isOutOfArea ? '#64748B' : '#16A34A';
+  const pinBg = isOutOfArea ? '#64748B' : isHighlighted ? '#0E8A45' : '#16A34A';
   const shortName =
     sup.brand === 'K-Gas'
       ? 'K-Gas Depot'
@@ -175,15 +178,34 @@ function createGasCylinderMarkerElement(
       : sup.name.split(' ')[0];
 
   const calloutHtml = showCallout
-    ? `<div style="margin-left: 6px; background: rgba(255,255,255,0.97); border: 1px solid rgba(0,0,0,0.06); border-radius: 12px; padding: 5px 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;">
-        <div style="font-size: 11px; font-weight: 800; color: #15191C; line-height: 1.15;">${shortName}</div>
-        <div style="font-size: 10px; font-weight: 600; color: #6B7280; line-height: 1.2;">${sup.distanceKm} km</div>
+    ? `<div style="margin-left: 6px; background: ${
+        isHighlighted ? '#0E8A45' : 'rgba(255,255,255,0.97)'
+      }; border: 1.5px solid ${
+        isHighlighted ? '#ffffff' : 'rgba(0,0,0,0.06)'
+      }; border-radius: 12px; padding: 5px 10px; box-shadow: ${
+        isHighlighted ? '0 8px 20px rgba(14,138,69,0.35)' : '0 4px 14px rgba(0,0,0,0.12)'
+      }; white-space: nowrap; text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;">
+        <div style="font-size: 11px; font-weight: 800; color: ${
+          isHighlighted ? '#ffffff' : '#15191C'
+        }; line-height: 1.15;">${isHighlighted ? `✓ ${shortName}` : shortName}</div>
+        <div style="font-size: 10px; font-weight: 700; color: ${
+          isHighlighted ? '#D1FAE5' : '#6B7280'
+        }; line-height: 1.2;">${
+          isHighlighted ? `Depot Found · ${sup.distanceKm} km` : `${sup.distanceKm} km`
+        }</div>
       </div>`
+    : '';
+
+  const pulseHalo = isHighlighted
+    ? `<div style="position: absolute; left: -6px; top: -2px; width: 46px; height: 46px; border-radius: 9999px; background: rgba(14,138,69,0.24); animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; pointer-events: none;"></div>`
     : '';
 
   container.innerHTML = `
     <div style="position: relative; display: flex; align-items: center; user-select: none;">
-      <div style="position: relative; width: 34px; height: 42px; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.24));">
+      ${pulseHalo}
+      <div style="position: relative; width: 34px; height: 42px; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.24)); transform: ${
+        isHighlighted ? 'scale(1.12)' : 'scale(1)'
+      }; transition: transform 0.2s ease;">
         <svg width="34" height="42" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M18 1C8.611 1 1 8.611 1 18C1 29.75 18 43 18 43C18 43 35 29.75 35 18C35 8.611 27.389 1 18 1Z" fill="${pinBg}" stroke="#ffffff" stroke-width="2"/>
           <path d="M15 9.5H21M16.2 9.5V11.2H19.8V9.5" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
@@ -282,6 +304,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   onDriverTelemetryUpdated,
   heightClassName,
   hideSearchOverlay = false,
+  highlightedSupplierId = null,
+  showPreviewConnection = false,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -348,6 +372,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const leafletIdleRidersRef = useRef<L.Marker[]>([]);
   const leafletSupplierMarkersRef = useRef<L.Marker[]>([]);
   const leafletRouteLayerRef = useRef<L.Polyline | null>(null);
+  const leafletPreviewLineRef = useRef<L.Polyline | null>(null);
   const leafletZoneLayersRef = useRef<L.Polygon[]>([]);
   const leafletVertexMarkersRef = useRef<L.Marker[]>([]);
 
@@ -476,6 +501,67 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
     leafletMapRef.current = lMap;
 
+    // Subtle Google-Maps-style deterministic vector canvas street grid underneath real tiles
+    // Guarantees crisp visible streets/blocks immediately while tiles load or in restricted/offline iframes
+    const StreetGridFallbackLayer = L.GridLayer.extend({
+      createTile(coords: L.Coords) {
+        const tile = document.createElement('canvas');
+        const size = this.getTileSize();
+        tile.width = size.x;
+        tile.height = size.y;
+        const ctx = tile.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#F2F4F0';
+          ctx.fillRect(0, 0, size.x, size.y);
+
+          // Deterministic soft green park patch on select blocks
+          const seed = Math.abs(Math.sin(coords.x * 12.9898 + coords.y * 78.233) * 43758.5453);
+          const frac = seed - Math.floor(seed);
+          if (frac > 0.62) {
+            ctx.fillStyle = '#DCEFE2';
+            ctx.fillRect(24, 24, size.x * 0.45, size.y * 0.36);
+          }
+
+          // Subtle residential block polygons
+          ctx.fillStyle = '#EAECE7';
+          ctx.fillRect(16, 16, 86, 68);
+          ctx.fillRect(136, 18, 98, 72);
+          ctx.fillRect(18, 128, 92, 96);
+          ctx.fillRect(142, 134, 90, 88);
+
+          // Secondary street grid lines
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(0, 106);
+          ctx.lineTo(size.x, 106);
+          ctx.moveTo(120, 0);
+          ctx.lineTo(120, size.y);
+          ctx.stroke();
+
+          // Primary arterial road highlight
+          if ((coords.x + coords.y) % 2 === 0) {
+            ctx.strokeStyle = '#E2DDD1';
+            ctx.lineWidth = 8;
+            ctx.beginPath();
+            ctx.moveTo(0, 214);
+            ctx.lineTo(size.x, 204);
+            ctx.stroke();
+
+            ctx.strokeStyle = '#FFFDF7';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.moveTo(0, 214);
+            ctx.lineTo(size.x, 204);
+            ctx.stroke();
+          }
+        }
+        return tile;
+      },
+    });
+    const fallbackGrid = new (StreetGridFallbackLayer as any)({ zIndex: 0 });
+    fallbackGrid.addTo(lMap);
+
     const tileUrl = activeToken
       ? `https://api.mapbox.com/styles/v1/mapbox/${
           mapStyle === 'streets' ? 'streets-v12' : 'light-v11'
@@ -486,15 +572,27 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
     const tiles = L.tileLayer(tileUrl, {
       maxZoom: 19,
+      zIndex: 2,
       attribution: '© Carto © OpenStreetMap',
     }).addTo(lMap);
 
+    let tileFallbackApplied = false;
     tiles.on('tileerror', () => {
-      tiles.setUrl('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+      if (!tileFallbackApplied) {
+        tileFallbackApplied = true;
+        tiles.setUrl('https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+      }
     });
 
     setIsMapLoaded(true);
     setMapError(null);
+
+    const rafId = requestAnimationFrame(() => {
+      lMap.invalidateSize({ pan: false });
+    });
+    const resizeTimer = window.setTimeout(() => {
+      lMap.invalidateSize({ pan: false });
+    }, 200);
 
     lMap.on('click', (e: L.LeafletMouseEvent) => {
       if (isDedicatedTracking || adminEditingZone) return;
@@ -506,13 +604,15 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     });
 
     const resizeObserver = new ResizeObserver(() => {
-      lMap.invalidateSize();
+      lMap.invalidateSize({ pan: false });
     });
     if (mapContainerRef.current) {
       resizeObserver.observe(mapContainerRef.current);
     }
 
     return () => {
+      cancelAnimationFrame(rafId);
+      window.clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       lMap.remove();
       leafletMapRef.current = null;
@@ -667,19 +767,29 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       const lng = sup.coordinates?.lng ?? 36.7865;
       const isServing = hasLocationSelection ? eligibleSupplierIds.has(sup.id) : true;
       const isOutOfArea = hasLocationSelection ? !eligibleSupplierIds.has(sup.id) : false;
+      const isHighlighted = Boolean(highlightedSupplierId && sup.id === highlightedSupplierId && isServing);
 
-      const markerEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, !isDedicatedTracking);
+      const markerEl = createGasCylinderMarkerElement(
+        sup,
+        isServing,
+        isOutOfArea,
+        !isDedicatedTracking,
+        isHighlighted
+      );
       const popupHtml = createSupplierPopupHtml(sup, isServing, isOutOfArea, hasLocationSelection);
 
       const depotIcon = L.divIcon({
         className: 'leaflet-custom-depot-icon',
         html: markerEl.outerHTML,
-        iconSize: [148, 44],
+        iconSize: [isHighlighted ? 195 : 148, 44],
         iconAnchor: [17, 40],
         popupAnchor: [0, -34],
       });
 
-      const marker = L.marker([lat, lng], { icon: depotIcon }).addTo(lMap);
+      const marker = L.marker([lat, lng], {
+        icon: depotIcon,
+        zIndexOffset: isHighlighted ? 500 : 0,
+      }).addTo(lMap);
       if (onSelectSupplierPin) {
         marker.on('click', () => onSelectSupplierPin(sup));
       } else {
@@ -688,7 +798,74 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
       leafletSupplierMarkersRef.current.push(marker);
     });
-  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult, onSelectSupplierPin]);
+
+    // Draw dashed preview connection & auto-fit camera when a depot has been found for entered location
+    if (leafletPreviewLineRef.current) {
+      leafletPreviewLineRef.current.remove();
+      leafletPreviewLineRef.current = null;
+    }
+
+    if (!isDedicatedTracking && !adminEditingZone) {
+      const foundDepot = highlightedSupplierId
+        ? suppliersToShow.find(
+            (s) => s.id === highlightedSupplierId && (!hasLocationSelection || eligibleSupplierIds.has(s.id))
+          )
+        : undefined;
+
+      try {
+        const size = lMap.getSize();
+        if (size.x === 0 || size.y === 0) {
+          lMap.invalidateSize({ pan: false });
+        }
+        if (foundDepot?.coordinates) {
+          if (showPreviewConnection) {
+            leafletPreviewLineRef.current = L.polyline(
+              [
+                [customerCoords.lat, customerCoords.lng],
+                [foundDepot.coordinates.lat, foundDepot.coordinates.lng],
+              ],
+              {
+                color: '#0E8A45',
+                weight: 3,
+                opacity: 0.78,
+                dashArray: '7, 7',
+              }
+            ).addTo(lMap);
+          }
+
+          const bounds = L.latLngBounds([
+            [customerCoords.lat, customerCoords.lng],
+            [foundDepot.coordinates.lat, foundDepot.coordinates.lng],
+          ]);
+          const refreshedSize = lMap.getSize();
+          if (refreshedSize.x > 0 && refreshedSize.y > 0) {
+            lMap.fitBounds(bounds, { padding: [65, 65], maxZoom: 15.5, animate: true });
+          } else {
+            lMap.setView([customerCoords.lat, customerCoords.lng], 14, { animate: false });
+          }
+        } else {
+          lMap.setView([customerCoords.lat, customerCoords.lng], lMap.getZoom() || 14.5, {
+            animate: true,
+          });
+        }
+      } catch {
+        // Guard against transient 0px container states during unmount/resize
+      }
+    }
+  }, [
+    engine,
+    isMapLoaded,
+    suppliers,
+    matchedSupplier,
+    isDedicatedTracking,
+    coverageResult,
+    onSelectSupplierPin,
+    highlightedSupplierId,
+    showPreviewConnection,
+    customerCoords.lat,
+    customerCoords.lng,
+    adminEditingZone,
+  ]);
 
   // Leaflet: Idle Available Delivery Motorcycles around customer location on Home map
   useEffect(() => {
@@ -859,7 +1036,10 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     mapboxMapRef.current = map;
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-left');
 
+    let mapDidLoad = false;
     map.on('load', () => {
+      mapDidLoad = true;
+      map.resize();
       setIsMapLoaded(true);
       if (isDedicatedTracking && activeToken) {
         addTrackingRoute(map);
@@ -867,8 +1047,9 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     });
 
     map.on('error', (e: any) => {
-      if (e?.error?.status === 401) {
-        setMapError('Invalid Mapbox access token. Please verify your public token.');
+      if (e?.error?.status === 401 || !mapDidLoad) {
+        console.warn('Mapbox GL style/token issue, switching to Leaflet road map:', e?.error);
+        setEngine('leaflet');
       }
     });
 
@@ -1190,8 +1371,15 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       const lat = sup.coordinates?.lat ?? -1.2785;
       const isServing = hasLocationSelection ? eligibleSupplierIds.has(sup.id) : true;
       const isOutOfArea = hasLocationSelection ? !eligibleSupplierIds.has(sup.id) : false;
+      const isHighlighted = Boolean(highlightedSupplierId && sup.id === highlightedSupplierId && isServing);
 
-      const depotEl = createGasCylinderMarkerElement(sup, isServing, isOutOfArea, !isDedicatedTracking);
+      const depotEl = createGasCylinderMarkerElement(
+        sup,
+        isServing,
+        isOutOfArea,
+        !isDedicatedTracking,
+        isHighlighted
+      );
       const popupHtml = createSupplierPopupHtml(sup, isServing, isOutOfArea, hasLocationSelection);
 
       if (onSelectSupplierPin) {
@@ -1214,7 +1402,84 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       depotMarker.addTo(map);
       mapboxSupplierMarkersRef.current.push(depotMarker);
     });
-  }, [engine, isMapLoaded, suppliers, matchedSupplier, isDedicatedTracking, coverageResult, onSelectSupplierPin]);
+
+    // Mapbox GL: Dashed preview connection & auto-fit to customer + found depot
+    const previewSourceId = 'depot-preview-connection-source';
+    const previewLayerId = 'depot-preview-connection-line';
+    const foundDepot = !isDedicatedTracking && !adminEditingZone && highlightedSupplierId
+      ? suppliersToShow.find(
+          (s) => s.id === highlightedSupplierId && (!hasLocationSelection || eligibleSupplierIds.has(s.id))
+        )
+      : undefined;
+
+    const previewFeatures: any[] =
+      foundDepot?.coordinates && showPreviewConnection
+        ? [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: [
+                  [customerCoords.lng, customerCoords.lat],
+                  [foundDepot.coordinates.lng, foundDepot.coordinates.lat],
+                ],
+              },
+            },
+          ]
+        : [];
+
+    const previewGeoJson: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: previewFeatures,
+    };
+
+    if (map.getSource(previewSourceId)) {
+      (map.getSource(previewSourceId) as mapboxgl.GeoJSONSource).setData(previewGeoJson);
+    } else if (previewFeatures.length > 0) {
+      map.addSource(previewSourceId, { type: 'geojson', data: previewGeoJson });
+      map.addLayer({
+        id: previewLayerId,
+        type: 'line',
+        source: previewSourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#0E8A45',
+          'line-width': 3,
+          'line-dasharray': [2, 2],
+          'line-opacity': 0.85,
+        },
+      });
+    }
+
+    if (!isDedicatedTracking && !adminEditingZone) {
+      if (foundDepot?.coordinates) {
+        const bounds = new mapboxgl.LngLatBounds();
+        bounds.extend([customerCoords.lng, customerCoords.lat]);
+        bounds.extend([foundDepot.coordinates.lng, foundDepot.coordinates.lat]);
+        map.fitBounds(bounds, { padding: 70, maxZoom: 15.5, duration: 650, essential: true });
+      } else {
+        map.easeTo({
+          center: [customerCoords.lng, customerCoords.lat],
+          duration: 500,
+          essential: true,
+        });
+      }
+    }
+  }, [
+    engine,
+    isMapLoaded,
+    suppliers,
+    matchedSupplier,
+    isDedicatedTracking,
+    coverageResult,
+    onSelectSupplierPin,
+    highlightedSupplierId,
+    showPreviewConnection,
+    customerCoords.lng,
+    customerCoords.lat,
+    adminEditingZone,
+  ]);
 
   // Mapbox GL: Available Delivery Motorcycles around customer location on Home map
   useEffect(() => {
@@ -1892,7 +2157,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       )}
 
       {/* Map Canvas Container */}
-      <div ref={mapContainerRef} className="w-full h-full z-0" />
+      <div ref={mapContainerRef} className="absolute inset-0 w-full h-full z-0" />
 
       {/* Floating Circular Controls Bottom-Right (Current Location + Map Layers) matching Reference */}
       <div

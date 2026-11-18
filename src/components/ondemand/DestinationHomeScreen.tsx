@@ -6,10 +6,13 @@ import {
   ChevronRight,
   MapPin,
   ShieldCheck,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { CustomerAuthSession } from '../../services/customerAuthService';
 import { NairobiLocation, OnDemandOrderState } from '../../types';
 import { NAIROBI_LOCATIONS } from '../../data/mockData';
+import { GeocodedPlace, searchPlaces } from '../../services/mapboxService';
 import {
   RecentDeliveryLocation,
   getRecentDeliveryLocations,
@@ -19,7 +22,11 @@ import {
 interface DestinationHomeScreenProps {
   customerSession: CustomerAuthSession | null;
   activeOrder: OnDemandOrderState | null;
-  onOpenMapSearch: (options?: { autoDetectGps?: boolean; initialQuery?: string }) => void;
+  onOpenMapSearch: (options?: {
+    autoDetectGps?: boolean;
+    initialQuery?: string;
+    autoSearchDepots?: boolean;
+  }) => void;
   onSelectLocationForMapConfirm: (location: NairobiLocation) => void;
   onTrackActiveOrder: () => void;
 }
@@ -177,10 +184,98 @@ export const DestinationHomeScreen: React.FC<DestinationHomeScreenProps> = ({
   onTrackActiveOrder,
 }) => {
   const [recentLocations, setRecentLocations] = useState<RecentDeliveryLocation[]>([]);
+  const [locationInput, setLocationInput] = useState('');
+  const [placeSuggestions, setPlaceSuggestions] = useState<GeocodedPlace[]>([]);
+  const [isSearchingPlaces, setIsSearchingPlaces] = useState(false);
+  const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
 
   useEffect(() => {
     setRecentLocations(getRecentDeliveryLocations(customerSession?.user.id));
   }, [customerSession]);
+
+  useEffect(() => {
+    const trimmed = locationInput.trim();
+    if (!trimmed) {
+      setPlaceSuggestions([]);
+      setIsSearchingPlaces(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearchingPlaces(true);
+    const timer = setTimeout(async () => {
+      const q = trimmed.toLowerCase();
+      const presetMatches: GeocodedPlace[] = NAIROBI_LOCATIONS.filter(
+        (loc) =>
+          loc.name.toLowerCase().includes(q) ||
+          loc.area.toLowerCase().includes(q) ||
+          loc.details.toLowerCase().includes(q)
+      ).map((loc) => ({
+        id: loc.id,
+        name: loc.name,
+        area: loc.area,
+        fullAddress: `${loc.name} · ${loc.area}`,
+        coordinates: {
+          lat: loc.coordinates.lat,
+          lng: loc.coordinates.lng,
+        },
+      }));
+
+      const remoteHits = await searchPlaces(trimmed);
+      if (cancelled) return;
+
+      const seen = new Set(presetMatches.map((m) => m.name.toLowerCase()));
+      const merged = [
+        ...presetMatches,
+        ...remoteHits.filter((r) => !seen.has(r.name.toLowerCase())),
+      ];
+      setPlaceSuggestions(merged.slice(0, 6));
+      setIsSearchingPlaces(false);
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [locationInput]);
+
+  const handleSelectPlace = (place: GeocodedPlace) => {
+    setIsSuggestionsOpen(false);
+    setLocationInput(place.name);
+    onSelectLocationForMapConfirm({
+      id: place.id,
+      name: place.name,
+      area: place.area,
+      details: place.fullAddress,
+      coordinates: {
+        lat: place.coordinates.lat,
+        lng: place.coordinates.lng,
+      },
+    });
+  };
+
+  const handleSearchSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = locationInput.trim();
+    if (!trimmed) {
+      onOpenMapSearch({ autoSearchDepots: true });
+      return;
+    }
+
+    if (placeSuggestions.length > 0) {
+      handleSelectPlace(placeSuggestions[0]);
+      return;
+    }
+
+    setIsSearchingPlaces(true);
+    const results = await searchPlaces(trimmed);
+    setIsSearchingPlaces(false);
+    if (results.length > 0) {
+      handleSelectPlace(results[0]);
+    } else {
+      onOpenMapSearch({ initialQuery: trimmed, autoSearchDepots: true });
+    }
+  };
 
   const displayRecentEntries: Array<{
     key: string;
@@ -309,33 +404,58 @@ export const DestinationHomeScreen: React.FC<DestinationHomeScreenProps> = ({
         </div>
 
         {/* Prominent White Pill Destination Search Card matching Reference */}
-        <div className="mb-6">
-          <div className="flex items-center gap-2.5 w-full bg-white rounded-2xl border border-neutral-100 hover:border-[#00893C]/35 px-3 py-2.5 shadow-[0_12px_32px_rgba(15,23,42,0.08)] transition-all">
+        <div className="mb-6 relative z-30">
+          <form
+            onSubmit={handleSearchSubmit}
+            className="flex items-center gap-2.5 w-full bg-white rounded-2xl border border-neutral-100 hover:border-[#00893C]/35 focus-within:border-[#00893C] px-3 py-2.5 shadow-[0_12px_32px_rgba(15,23,42,0.08)] transition-all"
+          >
             <button
-              type="button"
-              onClick={() => onOpenMapSearch()}
-              aria-label="Search delivery location"
+              type="submit"
+              aria-label="Search nearby gas stations for this location"
               className="w-11 h-11 rounded-xl bg-[#00893C] hover:bg-[#007433] text-white flex items-center justify-center shrink-0 shadow-sm transition-transform hover:scale-[1.03] cursor-pointer"
             >
-              <Search className="w-5 h-5" />
+              {isSearchingPlaces ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Search className="w-5 h-5" />
+              )}
             </button>
 
             <input
               type="text"
-              readOnly
-              value=""
-              onClick={() => onOpenMapSearch()}
-              onFocus={() => onOpenMapSearch()}
+              value={locationInput}
+              onFocus={() => {
+                if (locationInput.trim()) setIsSuggestionsOpen(true);
+              }}
+              onChange={(e) => {
+                setLocationInput(e.target.value);
+                setIsSuggestionsOpen(true);
+              }}
               placeholder="Enter your delivery location..."
               aria-label="Enter your delivery location"
-              className="w-full min-w-0 bg-transparent text-sm sm:text-base font-medium text-[#111827] placeholder-[#6B7280] focus:outline-none cursor-pointer"
+              className="w-full min-w-0 bg-transparent text-sm sm:text-base font-medium text-[#111827] placeholder-[#6B7280] focus:outline-none"
             />
+
+            {locationInput && (
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationInput('');
+                  setPlaceSuggestions([]);
+                  setIsSuggestionsOpen(false);
+                }}
+                aria-label="Clear location"
+                className="p-1 text-neutral-400 hover:text-neutral-700 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
 
             <span className="h-7 w-px bg-neutral-200 shrink-0" aria-hidden="true" />
 
             <button
               type="button"
-              onClick={() => onOpenMapSearch({ autoDetectGps: true })}
+              onClick={() => onOpenMapSearch({ autoDetectGps: true, autoSearchDepots: true })}
               title="Use current GPS location"
               aria-label="Detect current GPS location"
               className="w-9 h-9 rounded-full bg-[#E6F7ED] hover:bg-[#D2F2DF] text-[#00893C] flex items-center justify-center shrink-0 transition-colors cursor-pointer"
@@ -345,13 +465,78 @@ export const DestinationHomeScreen: React.FC<DestinationHomeScreenProps> = ({
 
             <button
               type="button"
-              onClick={() => onOpenMapSearch()}
+              onClick={() =>
+                onOpenMapSearch({
+                  initialQuery: locationInput.trim() || undefined,
+                  autoSearchDepots: true,
+                })
+              }
               className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-full bg-white border border-neutral-200/90 hover:border-[#00893C]/40 hover:bg-[#EDF6F1] text-xs font-bold text-[#00893C] shrink-0 whitespace-nowrap transition-colors cursor-pointer"
             >
               <MapPin className="w-3.5 h-3.5" />
               <span>Map</span>
             </button>
-          </div>
+          </form>
+
+          {/* Instant Location Autocomplete -> Search Nearby Gas Stations & Pin on Map */}
+          {isSuggestionsOpen && locationInput.trim().length > 0 && (
+            <div className="absolute left-0 right-0 top-full mt-2 bg-white rounded-2xl border border-neutral-200 shadow-2xl overflow-hidden z-40">
+              <div className="px-4 py-2 bg-[#F6F7F8] border-b border-neutral-100 flex items-center justify-between">
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-[#00893C]">
+                  Select location to search nearby gas stations
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsSuggestionsOpen(false)}
+                  className="text-[11px] font-bold text-[#6B7280] hover:text-[#111827] cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
+              {isSearchingPlaces && placeSuggestions.length === 0 ? (
+                <div className="px-4 py-4 flex items-center gap-2.5 text-xs text-[#6B7280]">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#00893C]" />
+                  <span>Finding Nairobi locations...</span>
+                </div>
+              ) : placeSuggestions.length > 0 ? (
+                <div className="max-h-60 overflow-y-auto divide-y divide-neutral-100">
+                  {placeSuggestions.map((place) => (
+                    <button
+                      key={place.id}
+                      type="button"
+                      onClick={() => handleSelectPlace(place)}
+                      className="w-full px-4 py-3 text-left hover:bg-[#F3FBF6] flex items-center justify-between gap-3 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <MapPin className="w-4 h-4 text-[#00893C] shrink-0 mt-0.5" />
+                        <div className="min-w-0">
+                          <p className="text-xs sm:text-sm font-bold text-[#111827] truncate">
+                            {place.name}
+                          </p>
+                          <p className="text-[11px] text-[#6B7280] truncate">{place.area}</p>
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-bold text-[#00893C] shrink-0 whitespace-nowrap">
+                        Find depots →
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenMapSearch({ initialQuery: locationInput.trim(), autoSearchDepots: true })
+                  }
+                  className="w-full px-4 py-3 text-left hover:bg-[#F3FBF6] flex items-center justify-between gap-2 text-xs font-bold text-[#00893C] cursor-pointer"
+                >
+                  <span>Search &quot;{locationInput.trim()}&quot; on interactive map</span>
+                  <span>→</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Recently Used Locations Section */}

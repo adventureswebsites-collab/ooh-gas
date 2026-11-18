@@ -182,6 +182,8 @@ export default function App() {
   // Destination-First Home Flow State (Step 1: Destination Search -> Step 2: Interactive Map Pin)
   const [homeStep, setHomeStep] = useState<'destination' | 'map_pin'>('destination');
   const [autoDetectGpsInMap, setAutoDetectGpsInMap] = useState<boolean>(false);
+  const [initialSearchQueryInMap, setInitialSearchQueryInMap] = useState<string>('');
+  const [autoSearchDepotsInMap, setAutoSearchDepotsInMap] = useState<boolean>(true);
   const [selectedShopPinModal, setSelectedShopPinModal] = useState<Supplier | null>(null);
   const [selectedRiderPinModal, setSelectedRiderPinModal] = useState<RiderInfo | null>(null);
   const [flowInitialSupplier, setFlowInitialSupplier] = useState<Supplier | null>(null);
@@ -1085,7 +1087,9 @@ export default function App() {
                 /* STEP 2: INTERACTIVE DESTINATION MAP & PIN CONFIRMATION */
                 <DestinationMapStep
                   initialLocation={currentLocation}
+                  initialSearchQuery={initialSearchQueryInMap}
                   autoDetectGpsOnMount={autoDetectGpsInMap}
+                  autoSearchDepotsOnMount={autoSearchDepotsInMap}
                   customerId={customerSession?.user.id}
                   suppliers={MOCK_SUPPLIERS}
                   riders={MOCK_RIDERS}
@@ -1093,6 +1097,7 @@ export default function App() {
                   onZonesUpdated={refreshZonesAndCoverage}
                   onBack={() => {
                     setAutoDetectGpsInMap(false);
+                    setInitialSearchQueryInMap('');
                     setHomeStep('destination');
                   }}
                   onConfirmLocation={(confirmedLoc, confirmedCoverage) => {
@@ -1101,6 +1106,7 @@ export default function App() {
                       setCoverageResult(confirmedCoverage);
                     }
                     setAutoDetectGpsInMap(false);
+                    setInitialSearchQueryInMap('');
                     setFlowInitialSupplier(null);
                     setOrderFlowTiming('asap');
                     setOrderFlowStep('select_gas');
@@ -1113,11 +1119,15 @@ export default function App() {
                   activeOrder={activeOrder}
                   onOpenMapSearch={(options) => {
                     setAutoDetectGpsInMap(Boolean(options?.autoDetectGps));
+                    setInitialSearchQueryInMap(options?.initialQuery || '');
+                    setAutoSearchDepotsInMap(options?.autoSearchDepots !== false);
                     setHomeStep('map_pin');
                   }}
                   onSelectLocationForMapConfirm={(loc) => {
                     setCurrentLocation(loc);
                     setAutoDetectGpsInMap(false);
+                    setInitialSearchQueryInMap(loc.name);
+                    setAutoSearchDepotsInMap(true);
                     setHomeStep('map_pin');
                   }}
                   onTrackActiveOrder={() => setIsLiveTrackerOpen(true)}

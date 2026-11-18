@@ -176,3 +176,11 @@
     transition: none !important;
   }
 }
+
+/* 7. Guarantee Leaflet map canvas always fills container and uses clean map surface */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #EDF2EE;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}

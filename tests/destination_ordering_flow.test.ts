@@ -1,5 +1,9 @@
 import assert from 'node:assert';
-import { filterQualifiedSuppliers, haversineDistanceKm } from '../src/services/supplierMatchingService';
+import {
+  filterQualifiedSuppliers,
+  findNearestDeliveryDepots,
+  haversineDistanceKm,
+} from '../src/services/supplierMatchingService';
 import { MOCK_SUPPLIERS, NAIROBI_LOCATIONS } from '../src/data/mockData';
 import { INITIAL_DELIVERY_ZONES } from '../src/data/deliveryZonesData';
 import { checkDeliveryCoverage } from '../src/services/deliveryZoneService';
@@ -113,6 +117,35 @@ async function runTests() {
   const rev = await reverseGeocode(36.7875, -1.2929, '');
   assert.ok(rev.name.toLowerCase().includes('yaya') || rev.area.toLowerCase().includes('kilimani'));
   console.log('✓ Offline/fallback Nairobi autocomplete & reverse geocoding verified:', rev.name);
+
+  // 7. Test Nearby Gas Station / Delivery Depot Discovery for Map Pinning
+  const nearbyKilimani = findNearestDeliveryDepots({
+    destination: kilimani,
+    coverageResult: kilimaniCoverage,
+    suppliers: MOCK_SUPPLIERS,
+  });
+  assert.strictEqual(nearbyKilimani.found, true);
+  assert.ok(nearbyKilimani.primaryDepot, 'Should return nearest primary depot for Kilimani');
+  assert.ok(
+    nearbyKilimani.nearbyDepots[0].calculatedDistanceKm <=
+      nearbyKilimani.nearbyDepots[nearbyKilimani.nearbyDepots.length - 1].calculatedDistanceKm,
+    'Nearby depots must be sorted closest-first for direct map pinning'
+  );
+
+  const nearbyOut = findNearestDeliveryDepots({
+    destination: outOfZoneLocation,
+    coverageResult: outCoverage,
+    suppliers: MOCK_SUPPLIERS,
+  });
+  assert.strictEqual(nearbyOut.found, false);
+  assert.strictEqual(nearbyOut.primaryDepot, null);
+  console.log(
+    '✓ Nearby depot discovery verified (pinned nearest:',
+    nearbyKilimani.primaryDepot?.name,
+    'at',
+    nearbyKilimani.primaryDepot?.calculatedDistanceKm,
+    'km)'
+  );
 
   console.log('\nALL DESTINATION-FIRST ORDERING FLOW TESTS PASSED!');
 }
