@@ -13,11 +13,13 @@ import {
   Bike,
   Store,
   Shield,
+  Settings,
 } from 'lucide-react';
 import { CustomerAuthSession, signOutCustomer } from '../services/customerAuthService';
 import { OohGasLogo } from './BrandIdentities';
 
 export type DrawerDestination =
+  | 'profile_settings'
   | 'order_history'
   | 'scheduled_orders'
   | 'favorites'
@@ -69,6 +71,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
     icon: React.ComponentType<{ className?: string }>;
     badge?: string | number;
   }> = [
+    { id: 'profile_settings', label: 'Profile Settings', icon: Settings },
     { id: 'order_history', label: 'Order History', icon: ReceiptText },
     {
       id: 'scheduled_orders',

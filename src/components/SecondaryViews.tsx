@@ -25,6 +25,11 @@ import {
   Flame,
   Scale,
   XCircle,
+  ReceiptText,
+  ChevronRight,
+  Bike,
+  Store,
+  Shield,
 } from 'lucide-react';
 import { SupplierLettermark } from './BrandIdentities';
 import {
@@ -78,6 +83,16 @@ interface ViewProps {
   onCancelScheduledOrder?: (id: string) => void;
   initialFilter?: 'all' | 'scheduled' | 'completed' | 'cancelled';
   onOpenHelp?: () => void;
+  unreadCount?: number;
+  favoriteCount?: number;
+  scheduledCount?: number;
+  onOpenOrderHistory?: () => void;
+  onOpenScheduledOrders?: () => void;
+  onOpenFavorites?: () => void;
+  onOpenNotifications?: () => void;
+  onOpenRiderPortal?: () => void;
+  onOpenSupplierPortal?: () => void;
+  onOpenAdminMonitor?: () => void;
 }
 
 // ==============================================================================
@@ -902,6 +917,16 @@ export const ProfileView: React.FC<ViewProps> = ({
   customerSession,
   onOpenAuthModal,
   onOpenHelp,
+  unreadCount = 0,
+  favoriteCount = 0,
+  scheduledCount = 0,
+  onOpenOrderHistory,
+  onOpenScheduledOrders,
+  onOpenFavorites,
+  onOpenNotifications,
+  onOpenRiderPortal,
+  onOpenSupplierPortal,
+  onOpenAdminMonitor,
 }) => {
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -1031,7 +1056,7 @@ export const ProfileView: React.FC<ViewProps> = ({
           <span>Back Home</span>
         </button>
         <span className="text-xs font-bold text-[#6B7280] uppercase tracking-wider">
-          Customer Profile
+          Profile Settings
         </span>
       </div>
 
@@ -1422,6 +1447,155 @@ export const ProfileView: React.FC<ViewProps> = ({
             <LogOut className="w-4 h-4 text-rose-600" />
             <span>Sign Out</span>
           </button>
+        </div>
+      )}
+
+      {/* Orders, Alerts & Preferences (All Hamburger Menu Items inside Profile Settings) */}
+      <div className="rounded-3xl border border-neutral-200/80 bg-white p-4 sm:p-5 shadow-2xs space-y-1">
+        <h4 className="text-xs font-extrabold text-[#6B7280] uppercase tracking-wider px-1 pb-2">
+          Orders, Saved &amp; Support
+        </h4>
+
+        {onOpenOrderHistory && (
+          <button
+            type="button"
+            onClick={onOpenOrderHistory}
+            className="w-full px-3 py-3 rounded-xl hover:bg-[#F6F7F8] active:bg-[#EDF6F1] flex items-center justify-between text-xs sm:text-sm font-semibold text-[#15191C] transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <ReceiptText className="w-4 h-4 text-[#226946]" />
+              <span>Order History</span>
+            </span>
+            <ChevronRight className="w-4 h-4 text-neutral-400" />
+          </button>
+        )}
+
+        {onOpenScheduledOrders && (
+          <button
+            type="button"
+            onClick={onOpenScheduledOrders}
+            className="w-full px-3 py-3 rounded-xl hover:bg-[#F6F7F8] active:bg-[#EDF6F1] flex items-center justify-between text-xs sm:text-sm font-semibold text-[#15191C] transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <CalendarClock className="w-4 h-4 text-[#226946]" />
+              <span>Scheduled Orders</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              {scheduledCount > 0 && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#226946] text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                  {scheduledCount}
+                </span>
+              )}
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </span>
+          </button>
+        )}
+
+        {onOpenFavorites && (
+          <button
+            type="button"
+            onClick={onOpenFavorites}
+            className="w-full px-3 py-3 rounded-xl hover:bg-[#F6F7F8] active:bg-[#EDF6F1] flex items-center justify-between text-xs sm:text-sm font-semibold text-[#15191C] transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <Heart className="w-4 h-4 text-[#226946]" />
+              <span>Favourite Gas Shops</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              {favoriteCount > 0 && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#226946] text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                  {favoriteCount}
+                </span>
+              )}
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </span>
+          </button>
+        )}
+
+        {onOpenNotifications && (
+          <button
+            type="button"
+            onClick={onOpenNotifications}
+            className="w-full px-3 py-3 rounded-xl hover:bg-[#F6F7F8] active:bg-[#EDF6F1] flex items-center justify-between text-xs sm:text-sm font-semibold text-[#15191C] transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <Bell className="w-4 h-4 text-[#226946]" />
+              <span>Notifications</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              {unreadCount > 0 && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#226946] text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+                  {unreadCount}
+                </span>
+              )}
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </span>
+          </button>
+        )}
+
+        {onOpenHelp && (
+          <button
+            type="button"
+            onClick={onOpenHelp}
+            className="w-full px-3 py-3 rounded-xl hover:bg-[#F6F7F8] active:bg-[#EDF6F1] flex items-center justify-between text-xs sm:text-sm font-semibold text-[#15191C] transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-3">
+              <HelpCircle className="w-4 h-4 text-[#226946]" />
+              <span>Help &amp; Support</span>
+            </span>
+            <ChevronRight className="w-4 h-4 text-neutral-400" />
+          </button>
+        )}
+      </div>
+
+      {/* Partner & Operations Portals inside Profile Settings */}
+      {(onOpenRiderPortal || onOpenSupplierPortal || onOpenAdminMonitor) && (
+        <div className="rounded-3xl border border-neutral-200/80 bg-white p-4 sm:p-5 shadow-2xs space-y-1">
+          <h4 className="text-xs font-extrabold text-[#6B7280] uppercase tracking-wider px-1 pb-2">
+            Partner &amp; Operations
+          </h4>
+
+          {onOpenRiderPortal && (
+            <button
+              type="button"
+              onClick={onOpenRiderPortal}
+              className="w-full px-3 py-2.5 rounded-xl hover:bg-[#F6F7F8] flex items-center justify-between text-xs font-semibold text-[#15191C] cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <Bike className="w-4 h-4 text-[#226946]" />
+                <span>Rider GPS App</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </button>
+          )}
+
+          {onOpenSupplierPortal && (
+            <button
+              type="button"
+              onClick={onOpenSupplierPortal}
+              className="w-full px-3 py-2.5 rounded-xl hover:bg-[#F6F7F8] flex items-center justify-between text-xs font-semibold text-[#15191C] cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <Store className="w-4 h-4 text-[#226946]" />
+                <span>Gas Shop Supplier Portal</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </button>
+          )}
+
+          {onOpenAdminMonitor && (
+            <button
+              type="button"
+              onClick={onOpenAdminMonitor}
+              className="w-full px-3 py-2.5 rounded-xl hover:bg-[#F6F7F8] flex items-center justify-between text-xs font-semibold text-[#6B7280] cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <Shield className="w-4 h-4 text-[#6B7280]" />
+                <span>Admin Dispatch Monitor</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-neutral-400" />
+            </button>
+          )}
         </div>
       )}
     </div>

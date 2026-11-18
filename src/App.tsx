@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { WelcomeScreen } from './components/WelcomeScreen';
-import { NavigationDrawer, DrawerDestination } from './components/NavigationDrawer';
 import { MapboxDeliveryMap } from './components/map/MapboxDeliveryMap';
 import {
   ShopDetailSheetModal,
@@ -95,7 +94,6 @@ export default function App() {
   const [ordersInitialFilter, setOrdersInitialFilter] = useState<
     'all' | 'scheduled' | 'completed' | 'cancelled'
   >('all');
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Location state
   const [currentLocation, setCurrentLocation] = useState<NairobiLocation>(NAIROBI_LOCATIONS[0]);
@@ -817,27 +815,12 @@ export default function App() {
     setIsManualOrderModalOpen(true);
   };
 
-  // Drawer Destination Handler
-  const handleDrawerDestination = (dest: DrawerDestination) => {
-    setAuthPage(null);
-    setOrderFlowStep(null);
-    setIsLiveTrackerOpen(false);
-    if (dest === 'order_history') {
-      setOrdersInitialFilter('all');
-      setActiveTab('orders');
-    } else if (dest === 'scheduled_orders') {
-      setOrdersInitialFilter('scheduled');
-      setActiveTab('orders');
-    } else if (dest === 'favorites') {
-      setActiveTab('favorites');
-    } else if (dest === 'saved_addresses') {
-      setActiveTab('profile');
-    } else if (dest === 'notifications') {
-      setActiveTab('notifications');
-    } else if (dest === 'help_support') {
-      setActiveTab('help');
-    }
-  };
+  const isDestinationHomeView =
+    authPage === null &&
+    activeTab === 'home' &&
+    orderFlowStep === null &&
+    homeStep === 'destination' &&
+    !(isLiveTrackerOpen && activeOrder);
 
   const isHomeMapView =
     authPage === null &&
@@ -978,40 +961,9 @@ export default function App() {
           maxWidth: simulatedWidth ? `${simulatedWidth}px` : '100%',
         }}
       >
-        {/* Top App Bar */}
+        {/* Top App Bar: OohGas Logo only, seamless over homepage header wave */}
         <Header
-          currentLocation={currentLocation}
-          onOpenLocationModal={() => setIsLocationModalOpen(true)}
-          onOpenNotificationModal={() => setIsNotificationModalOpen(true)}
-          onOpenDrawer={() => setIsDrawerOpen(true)}
-          unreadCount={unreadCount}
-          customerSession={customerSession}
-          onOpenAuthModal={(mode) => handleOpenAuthPage(mode === 'signup' ? 'signup' : 'login')}
-          onOpenProfile={() => {
-            setAuthPage(null);
-            setOrderFlowStep(null);
-            setIsLiveTrackerOpen(false);
-            setActiveTab('profile');
-          }}
-          onOpenOrders={() => {
-            setAuthPage(null);
-            setOrderFlowStep(null);
-            setIsLiveTrackerOpen(false);
-            setOrdersInitialFilter('all');
-            setActiveTab('orders');
-          }}
-          onOpenNotificationsTab={() => {
-            setAuthPage(null);
-            setOrderFlowStep(null);
-            setIsLiveTrackerOpen(false);
-            setActiveTab('notifications');
-          }}
-          onOpenFavorites={() => {
-            setAuthPage(null);
-            setOrderFlowStep(null);
-            setIsLiveTrackerOpen(false);
-            setActiveTab('favorites');
-          }}
+          transparentOverlay={isDestinationHomeView}
           onNavigateHome={() => {
             setAuthPage(null);
             setOrderFlowStep(null);
@@ -1019,22 +971,6 @@ export default function App() {
             setHomeStep('destination');
             setActiveTab('home');
           }}
-          activeTab={activeTab}
-        />
-
-        {/* Slide-Out Navigation Drawer */}
-        <NavigationDrawer
-          isOpen={isDrawerOpen}
-          onClose={() => setIsDrawerOpen(false)}
-          customerSession={customerSession}
-          unreadCount={unreadCount}
-          favoriteCount={favoriteSupplierIds.length}
-          scheduledCount={scheduledOrders.filter((s) => s.status === 'scheduled').length}
-          onSelectDestination={handleDrawerDestination}
-          onOpenAuth={(m) => handleOpenAuthPage(m)}
-          onOpenRiderPortal={() => setIsRiderPortalOpen(true)}
-          onOpenSupplierPortal={() => setIsSupplierPortalOpen(true)}
-          onOpenAdminMonitor={() => setIsAdminOrdersViewOpen(true)}
         />
 
         {/* Dynamic Main Body Content */}
@@ -1042,7 +978,9 @@ export default function App() {
           className={
             isHomeMapView
               ? 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-0 lg:px-6 pt-0 lg:py-5'
-              : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
+              : isDestinationHomeView
+                ? 'w-full flex-1 flex flex-col px-0 py-0'
+                : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
           }
         >
           {/* SCREEN 2: Welcome OTP Continuation / Reset Password Pages */}
@@ -1182,12 +1120,6 @@ export default function App() {
                     setAutoDetectGpsInMap(false);
                     setHomeStep('map_pin');
                   }}
-                  onOpenProfile={() => {
-                    setAuthPage(null);
-                    setOrderFlowStep(null);
-                    setActiveTab('profile');
-                  }}
-                  onOpenAuth={(mode) => handleOpenAuthPage(mode || 'login')}
                   onTrackActiveOrder={() => setIsLiveTrackerOpen(true)}
                 />
               )}
@@ -1301,6 +1233,22 @@ export default function App() {
                 onBackToHome={() => setActiveTab('home')}
                 customerSession={customerSession}
                 onOpenHelp={() => setActiveTab('help')}
+                unreadCount={unreadCount}
+                favoriteCount={favoriteSupplierIds.length}
+                scheduledCount={scheduledOrders.filter((s) => s.status === 'scheduled').length}
+                onOpenOrderHistory={() => {
+                  setOrdersInitialFilter('all');
+                  setActiveTab('orders');
+                }}
+                onOpenScheduledOrders={() => {
+                  setOrdersInitialFilter('scheduled');
+                  setActiveTab('orders');
+                }}
+                onOpenFavorites={() => setActiveTab('favorites')}
+                onOpenNotifications={() => setActiveTab('notifications')}
+                onOpenRiderPortal={() => setIsRiderPortalOpen(true)}
+                onOpenSupplierPortal={() => setIsSupplierPortalOpen(true)}
+                onOpenAdminMonitor={() => setIsAdminOrdersViewOpen(true)}
                 onOpenAuthModal={(mode) =>
                   handleOpenAuthPage(
                     mode === 'signup' ? 'signup' : 'login',
