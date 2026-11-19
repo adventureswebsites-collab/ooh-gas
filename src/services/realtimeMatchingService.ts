@@ -78,12 +78,23 @@ export interface MatchingOrderPayload {
   paymentMethod: string;
 }
 
+export interface AssignedRiderRecord {
+  id: string;
+  name: string;
+  phone: string;
+  plateNumber: string;
+  vehicleModel: string;
+  assignedAt: string;
+}
+
 export interface LiveOrderRecord extends MatchingOrderPayload {
   status: OrderStatus;
   deliveryFee: number;
   totalAmount: number;
+  preferredSupplierId?: string;
   assignedSupplierId?: string;
   assignedZoneId?: string;
+  assignedRider?: AssignedRiderRecord;
   currentOfferId?: string;
   currentOfferExpiresAt?: string;
   matchingSession?: OrderMatchingSession;
@@ -97,6 +108,23 @@ export interface LiveOrderRecord extends MatchingOrderPayload {
 const activeOrders = new Map<string, LiveOrderRecord>();
 const supplierOffers = new Map<string, SupplierOrderOffer>();
 const matchingSessions = new Map<string, OrderMatchingSession>();
+const depotAvailability = new Map<string, { isOnline: boolean; updatedAt: string }>();
+
+MULTI_SUPPLIER_BUSINESSES.forEach((b) => {
+  depotAvailability.set(b.id, { isOnline: b.status === 'active', updatedAt: b.updatedAt || new Date().toISOString() });
+});
+
+// Map UI supplier IDs (MOCK_SUPPLIERS) to multi-supplier business IDs
+const SUPPLIER_ID_ALIAS_MAP: Record<string, string> = {
+  'k-gas-hub': 'sup-kgas-kilimani',
+  'total-energies-station': 'sup-total-westlands',
+  'shell-gas-point': 'sup-rubis-lavington',
+};
+
+export function resolveBusinessSupplierId(supplierId?: string): string | undefined {
+  if (!supplierId) return undefined;
+  return SUPPLIER_ID_ALIAS_MAP[supplierId] || supplierId;
+}
 
 // Lock set for transactional concurrency prevention (no two suppliers can claim the same order)
 const orderLocks = new Set<string>();
@@ -132,24 +160,28 @@ export function broadcastEvent(event: string, payload: any) {
  *    - Multi-criteria weighted scoring
  */
 export function rankEligibleSuppliers(
-  order: MatchingOrderPayload,
+  order: MatchingOrderPayload & { preferredSupplierId?: string },
   weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
 ): SupplierCandidateEvaluation[] {
   const point = order.deliveryPoint;
+  const preferredId = resolveBusinessSupplierId(order.preferredSupplierId);
 
   // 1. Find active zones containing customer coordinates
   const matchingZones = MULTI_SUPPLIER_DELIVERY_ZONES.filter((zone) => {
     if (!zone.isActive) return false;
+    const avail = depotAvailability.get(zone.supplierId);
+    if (avail && !avail.isOnline) return false;
     return isPointInPolygon(point, zone.boundary);
   });
 
   const candidates: SupplierCandidateEvaluation[] = [];
+  const seenSupplierIds = new Set<string>();
 
   for (const zone of matchingZones) {
     const supplier = MULTI_SUPPLIER_BUSINESSES.find(
       (s) => s.id === zone.supplierId && s.status === 'active'
     );
-    if (!supplier) continue;
+    if (!supplier || seenSupplierIds.has(supplier.id)) continue;
 
     // Check minimum order value
     if (order.subtotal < zone.minOrderValue) {
@@ -185,6 +217,8 @@ export function rankEligibleSuppliers(
       continue;
     }
 
+    seenSupplierIds.add(supplier.id);
+
     // Calculate distance from supplier depot to customer
     const distanceKm = calculateDistanceKm(
       supplier.depotLocation.lat,
@@ -193,35 +227,30 @@ export function rankEligibleSuppliers(
       point.lng
     );
 
-    // Compute normalized criterion scores (0.0 to 1.0)
-    // 1. Coverage: 1.0 if delivery fee is 0 (home/primary zone), else 0.85
     const coverageScore = zone.baseDeliveryFee === 0 ? 1.0 : 0.85;
-
-    // 2. Stock cushion: scaled up to 40 units
     const stockScore = Math.min(1.0, Math.max(0.1, minStockCushion / 40.0));
-
-    // 3. Distance decay: 1.0 at 0km, decays over 12km max
     const distanceScore = Math.max(0.05, 1.0 - distanceKm / 12.0);
 
-    // 4. ETA score
     let etaScore = 0.75;
     if (zone.estimatedDeliveryMin.includes('15')) etaScore = 1.0;
     else if (zone.estimatedDeliveryMin.includes('20')) etaScore = 0.90;
     else if (zone.estimatedDeliveryMin.includes('25')) etaScore = 0.80;
 
-    // 5. Rating score
     const ratingScore = supplier.rating / 5.0;
 
-    // Composite weighted score
-    const compositeScore =
+    let compositeScore =
       coverageScore * weights.coverage +
       stockScore * weights.stock +
       distanceScore * weights.distance +
       etaScore * weights.eta +
       ratingScore * weights.rating;
 
+    if (preferredId && supplier.id === preferredId) {
+      compositeScore += 0.35;
+    }
+
     candidates.push({
-      rank: 0, // Assigned after sorting
+      rank: 0,
       supplierId: supplier.id,
       businessName: supplier.businessName,
       tradeName: supplier.tradeName,
@@ -240,6 +269,54 @@ export function rankEligibleSuppliers(
         rating: Math.round(ratingScore * 100) / 100,
       },
     });
+  }
+
+  // Metro fallback: if point sits inside greater Nairobi/Mombasa/Kisumu metro (within 18 km of an online depot)
+  // but outside the tight zone boxes, still route to nearest online depots rather than dropping the order.
+  if (candidates.length === 0) {
+    for (const supplier of MULTI_SUPPLIER_BUSINESSES) {
+      if (supplier.status !== 'active') continue;
+      const avail = depotAvailability.get(supplier.id);
+      if (avail && !avail.isOnline) continue;
+
+      const distanceKm = calculateDistanceKm(
+        supplier.depotLocation.lat,
+        supplier.depotLocation.lng,
+        point.lat,
+        point.lng
+      );
+      if (distanceKm > 18) continue;
+
+      const fallbackZone = MULTI_SUPPLIER_DELIVERY_ZONES.find(
+        (z) => z.supplierId === supplier.id && z.isActive
+      );
+
+      let score = Math.max(0.25, 1.0 - distanceKm / 20.0) * 0.7 + (supplier.rating / 5.0) * 0.3;
+      if (preferredId && supplier.id === preferredId) {
+        score += 0.35;
+      }
+
+      candidates.push({
+        rank: 0,
+        supplierId: supplier.id,
+        businessName: supplier.businessName,
+        tradeName: supplier.tradeName,
+        distanceKm,
+        zoneId: fallbackZone?.id || `metro-${supplier.primaryTownId}`,
+        zoneName: fallbackZone?.name || `${supplier.primaryTownId.toUpperCase()} Metro`,
+        deliveryFee: distanceKm <= 3 ? 0 : 150,
+        estimatedDeliveryMin: distanceKm <= 4 ? '20–30 min' : '30–45 min',
+        minStockCushion: 15,
+        compositeScore: Math.round(score * 10000) / 10000,
+        scoreBreakdown: {
+          coverage: 0.75,
+          stock: 0.85,
+          distance: Math.round(Math.max(0.1, 1.0 - distanceKm / 18.0) * 100) / 100,
+          eta: 0.75,
+          rating: Math.round((supplier.rating / 5.0) * 100) / 100,
+        },
+      });
+    }
   }
 
   // Sort descending by compositeScore, secondary by shortest distance
@@ -266,6 +343,7 @@ export async function createAndMatchOrder(
     customerId?: string;
     customerName: string;
     phoneNumber: string;
+    preferredSupplierId?: string;
     deliveryAddress: {
       street: string;
       building?: string;
@@ -279,6 +357,8 @@ export async function createAndMatchOrder(
     };
     items: Array<{
       productId: string;
+      brand?: string;
+      cylinderSize?: string;
       purchaseType: 'refill' | 'complete_unit' | 'exchange';
       quantity: number;
     }>;
@@ -303,17 +383,20 @@ export async function createAndMatchOrder(
       throw new Error(`Quantity must be greater than zero for product: ${master.brand}`);
     }
 
+    const effectiveSize = item.cylinderSize || master.cylinderSize;
+    const effectiveBrand = item.brand || master.brand;
+
     // Benchmark base pricing fallback based on cylinder size
     let basePrice = 1300;
-    if (master.cylinderSize === '13kg') {
-      basePrice = item.purchaseType === 'refill' ? 2850 : 6900;
-    } else if (master.cylinderSize === '6kg') {
-      basePrice = item.purchaseType === 'refill' ? 1300 : 3800;
-    } else if (master.cylinderSize === '22.5kg') {
+    if (effectiveSize === '13kg') {
+      basePrice = item.purchaseType === 'refill' ? 2850 : 8400;
+    } else if (effectiveSize === '6kg') {
+      basePrice = item.purchaseType === 'refill' ? 1300 : 4650;
+    } else if (effectiveSize === '22.5kg') {
       basePrice = item.purchaseType === 'refill' ? 5150 : 13800;
-    } else if (master.cylinderSize === '29kg') {
-      basePrice = item.purchaseType === 'refill' ? 6500 : 14500;
-    } else if (master.cylinderSize === '50kg') {
+    } else if (effectiveSize === '29kg') {
+      basePrice = item.purchaseType === 'refill' ? 6750 : 17200;
+    } else if (effectiveSize === '50kg') {
       basePrice = item.purchaseType === 'refill' ? 11200 : 26500;
     } else {
       basePrice = item.purchaseType === 'refill' ? 2000 : 5000;
@@ -322,12 +405,14 @@ export async function createAndMatchOrder(
 
     verifiedItems.push({
       productId: master.id,
-      brand: master.brand,
-      cylinderSize: master.cylinderSize,
+      brand: effectiveBrand,
+      cylinderSize: effectiveSize,
       purchaseType: item.purchaseType,
       quantity: item.quantity,
     });
   }
+
+  const resolvedPreferredId = resolveBusinessSupplierId(payload.preferredSupplierId);
 
   const orderData: MatchingOrderPayload = {
     orderId,
@@ -345,6 +430,7 @@ export async function createAndMatchOrder(
   // Initial order record in PENDING state
   const liveOrder: LiveOrderRecord = {
     ...orderData,
+    preferredSupplierId: resolvedPreferredId,
     status: 'PENDING',
     deliveryFee: 0,
     totalAmount: subtotal,
@@ -354,7 +440,16 @@ export async function createAndMatchOrder(
   };
 
   activeOrders.set(orderId, liveOrder);
-  broadcastEvent('order_created', { orderId, orderNumber, status: 'PENDING' });
+  broadcastEvent('order_created', {
+    orderId,
+    orderNumber,
+    status: 'PENDING',
+    customerName: liveOrder.customerName,
+    estate: liveOrder.deliveryAddress.estate,
+    items: liveOrder.items,
+    totalAmount: liveOrder.totalAmount,
+    createdAt: liveOrder.createdAt,
+  });
 
   // Transition to MATCHING_SUPPLIER
   liveOrder.status = 'MATCHING_SUPPLIER';
@@ -362,7 +457,7 @@ export async function createAndMatchOrder(
   broadcastEvent('order_status_changed', { orderId, status: 'MATCHING_SUPPLIER' });
 
   // Rank eligible suppliers
-  const candidates = rankEligibleSuppliers(orderData);
+  const candidates = rankEligibleSuppliers({ ...orderData, preferredSupplierId: resolvedPreferredId });
 
   const session: OrderMatchingSession = {
     id: `session-${orderId}`,
@@ -460,6 +555,11 @@ export async function offerOrderToCandidate(
     offerId,
     supplierId: candidate.supplierId,
     tradeName: candidate.tradeName,
+    customerName: order.customerName,
+    estate: order.deliveryAddress.estate,
+    items: order.items,
+    totalAmount: order.subtotal + candidate.deliveryFee,
+    distanceKm: candidate.distanceKm,
     rank: candidate.rank,
     candidateCount: session.candidateCount,
     expiresAt,
@@ -903,4 +1003,202 @@ export function recordDriverLocation(data: {
 
 export function getDriverLocationForOrder(orderId: string): DriverTelemetryRecord | undefined {
   return driverLocations.get(orderId);
+}
+
+/**
+ * 10. Depot Operations Dashboard Helpers (Snapshot, Rider Assignment, Stock & Status)
+ */
+export function assignRiderToOrder(
+  orderId: string,
+  rider: Omit<AssignedRiderRecord, 'assignedAt'>,
+  nextStage?: OrderStatus
+): { success: boolean; order?: LiveOrderRecord; error?: string } {
+  const order = activeOrders.get(orderId);
+  if (!order) {
+    return { success: false, error: 'Order not found' };
+  }
+
+  order.assignedRider = {
+    ...rider,
+    assignedAt: new Date().toISOString(),
+  };
+  if (nextStage) {
+    order.status = nextStage;
+  } else if (order.status === 'SUPPLIER_ACCEPTED') {
+    order.status = 'PREPARING';
+  }
+  order.updatedAt = new Date().toISOString();
+
+  broadcastEvent('rider_assigned', {
+    orderId: order.orderId,
+    orderNumber: order.orderNumber,
+    rider: order.assignedRider,
+    status: order.status,
+  });
+
+  broadcastEvent('delivery_status_changed', {
+    orderId: order.orderId,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    rider: order.assignedRider,
+    updatedAt: order.updatedAt,
+  });
+
+  return { success: true, order };
+}
+
+export function updateDepotInventory(
+  supplierProductId: string,
+  updates: { stockRefill?: number; stockComplete?: number; isAvailable?: boolean }
+): { success: boolean; product?: any; error?: string } {
+  const sp = MULTI_SUPPLIER_PRODUCTS.find((p) => p.id === supplierProductId);
+  if (!sp) {
+    return { success: false, error: 'Inventory SKU not found' };
+  }
+
+  if (typeof updates.stockRefill === 'number' && updates.stockRefill >= 0) {
+    sp.stockRefill = Math.floor(updates.stockRefill);
+  }
+  if (typeof updates.stockComplete === 'number' && updates.stockComplete >= 0) {
+    sp.stockComplete = Math.floor(updates.stockComplete);
+  }
+  if (typeof updates.isAvailable === 'boolean') {
+    sp.isAvailable = updates.isAvailable;
+  }
+
+  broadcastEvent('depot_inventory_updated', {
+    supplierId: sp.supplierId,
+    supplierProductId: sp.id,
+    stockRefill: sp.stockRefill,
+    stockComplete: sp.stockComplete,
+    isAvailable: sp.isAvailable,
+  });
+
+  return { success: true, product: sp };
+}
+
+export function setDepotOnlineStatus(
+  supplierId: string,
+  isOnline: boolean
+): { success: boolean; supplierId: string; isOnline: boolean; updatedAt: string } {
+  const updatedAt = new Date().toISOString();
+  depotAvailability.set(supplierId, { isOnline, updatedAt });
+
+  broadcastEvent('depot_status_changed', {
+    supplierId,
+    isOnline,
+    updatedAt,
+  });
+
+  return { success: true, supplierId, isOnline, updatedAt };
+}
+
+export function getDepotDashboardSnapshot(supplierId: string = 'all') {
+  const isAll = !supplierId || supplierId === 'all';
+  const resolvedId = isAll ? 'all' : resolveBusinessSupplierId(supplierId) || supplierId;
+
+  const relevantOffers = Array.from(supplierOffers.values())
+    .filter((o) => isAll || o.supplierId === resolvedId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map((offer) => {
+      const order = activeOrders.get(offer.orderId);
+      const business = MULTI_SUPPLIER_BUSINESSES.find((b) => b.id === offer.supplierId);
+      const candidate = order?.matchingSession?.candidatesEvaluated.find(
+        (c) => c.supplierId === offer.supplierId
+      );
+      return {
+        ...offer,
+        supplierTradeName: business?.tradeName || offer.supplierId,
+        distanceKm: candidate?.distanceKm ?? null,
+        deliveryFee: candidate?.deliveryFee ?? order?.deliveryFee ?? 0,
+        estimatedDeliveryMin: candidate?.estimatedDeliveryMin ?? '20–30 min',
+        order: order
+          ? {
+              orderId: order.orderId,
+              orderNumber: order.orderNumber,
+              customerName: order.customerName,
+              phoneNumber: order.phoneNumber,
+              deliveryAddress: order.deliveryAddress,
+              deliveryPoint: order.deliveryPoint,
+              items: order.items,
+              subtotal: order.subtotal,
+              deliveryFee: order.deliveryFee,
+              totalAmount: order.totalAmount,
+              paymentMethod: order.paymentMethod,
+              paymentStatus: order.paymentStatus,
+              payheroReceipt: order.payheroReceipt,
+              assignedRider: order.assignedRider,
+              status: order.status,
+              createdAt: order.createdAt,
+              updatedAt: order.updatedAt,
+            }
+          : null,
+      };
+    });
+
+  const relevantOrders = Array.from(activeOrders.values())
+    .filter((o) => {
+      if (isAll) return true;
+      if (o.assignedSupplierId === resolvedId) return true;
+      const currentOffer = o.currentOfferId ? supplierOffers.get(o.currentOfferId) : undefined;
+      if (currentOffer?.supplierId === resolvedId) return true;
+      return Boolean(
+        o.matchingSession?.candidatesEvaluated.some((c) => c.supplierId === resolvedId)
+      );
+    })
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map((o) => {
+      const business = o.assignedSupplierId
+        ? MULTI_SUPPLIER_BUSINESSES.find((b) => b.id === o.assignedSupplierId)
+        : undefined;
+      return {
+        ...o,
+        assignedSupplierName: business?.tradeName,
+      };
+    });
+
+  const inventory = MULTI_SUPPLIER_PRODUCTS.filter(
+    (sp) => isAll || sp.supplierId === resolvedId
+  ).map((sp) => {
+    const master = MASTER_PRODUCTS.find((p) => p.id === sp.productId);
+    const business = MULTI_SUPPLIER_BUSINESSES.find((b) => b.id === sp.supplierId);
+    return {
+      ...sp,
+      brand: master?.brand || 'LPG',
+      cylinderSize: master?.cylinderSize || '13kg',
+      valveType: master?.valveType || '20mm Compact',
+      supplierTradeName: business?.tradeName || sp.supplierId,
+    };
+  });
+
+  const depotStatuses: Record<string, { isOnline: boolean; updatedAt: string }> = {};
+  depotAvailability.forEach((val, key) => {
+    depotStatuses[key] = val;
+  });
+
+  const pendingCount = relevantOffers.filter((o) => o.status === 'offered').length;
+  const activeDispatchCount = relevantOrders.filter((o) =>
+    ['SUPPLIER_ACCEPTED', 'PREPARING', 'OUT_FOR_DELIVERY'].includes(o.status)
+  ).length;
+  const deliveredOrders = relevantOrders.filter((o) => o.status === 'DELIVERED');
+  const acceptedOrActive = relevantOrders.filter((o) =>
+    ['SUPPLIER_ACCEPTED', 'PREPARING', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(o.status)
+  );
+  const totalRevenueKsh = acceptedOrActive.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+
+  return {
+    supplierId: resolvedId,
+    offers: relevantOffers,
+    orders: relevantOrders,
+    inventory,
+    depotStatuses,
+    metrics: {
+      pendingCount,
+      activeDispatchCount,
+      deliveredCount: deliveredOrders.length,
+      totalOrdersCount: relevantOrders.length,
+      totalRevenueKsh,
+    },
+    serverTime: new Date().toISOString(),
+  };
 }

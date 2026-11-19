@@ -1,37 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import { fetchAdminOrders } from '../../services/multiSupplierService';
+import { PrivateDepotLinksManager } from './PrivateDepotLinksManager';
 import {
   ShieldAlert,
   RotateCcw,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Building2,
   Banknote,
   Search,
   Filter,
-  Eye,
   X,
   Layers,
+  KeyRound,
 } from 'lucide-react';
 
 interface AdminOrdersMatchingViewProps {
   isOpen: boolean;
   onClose: () => void;
   adminToken?: string;
+  initialTab?: 'orders' | 'depot_links';
 }
 
 export const AdminOrdersMatchingView: React.FC<AdminOrdersMatchingViewProps> = ({
   isOpen,
   onClose,
   adminToken = 'admin_session_oohgas_2026_verified',
+  initialTab = 'orders',
 }) => {
+  const [activeTab, setActiveTab] = useState<'orders' | 'depot_links'>(initialTab);
   const [orders, setOrders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   const loadAdminOrders = async () => {
     setIsLoading(true);
@@ -98,15 +103,18 @@ export const AdminOrdersMatchingView: React.FC<AdminOrdersMatchingViewProps> = (
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={loadAdminOrders}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
+            {activeTab === 'orders' && (
+              <button
+                onClick={loadAdminOrders}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+            )}
             <button
               onClick={onClose}
+              aria-label="Close Admin Console"
               className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
             >
               <X className="w-5 h-5" />
@@ -114,8 +122,41 @@ export const AdminOrdersMatchingView: React.FC<AdminOrdersMatchingViewProps> = (
           </div>
         </div>
 
-        {/* Filter & Search Bar */}
-        <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 text-xs flex-wrap">
+        {/* Admin Console Section Tabs */}
+        <div className="bg-slate-900/95 px-4 sm:px-5 pb-3 flex items-center gap-2 border-b border-slate-800">
+          <button
+            type="button"
+            onClick={() => setActiveTab('orders')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap ${
+              activeTab === 'orders'
+                ? 'bg-[#0E8A45] text-white'
+                : 'bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Order Matching Monitor</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('depot_links')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap ${
+              activeTab === 'depot_links'
+                ? 'bg-[#0E8A45] text-white'
+                : 'bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Private Depot Links</span>
+          </button>
+        </div>
+
+        {activeTab === 'depot_links' ? (
+          <PrivateDepotLinksManager adminToken={adminToken} />
+        ) : (
+          <>
+            {/* Filter & Search Bar */}
+            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 text-xs flex-wrap">
           <div className="flex items-center gap-2 flex-1 min-w-[200px]">
             <Search className="w-4 h-4 text-slate-400" />
             <input
@@ -378,6 +419,8 @@ export const AdminOrdersMatchingView: React.FC<AdminOrdersMatchingViewProps> = (
             )}
           </div>
         </div>
+          </>
+        )}
       </div>
     </div>
   );

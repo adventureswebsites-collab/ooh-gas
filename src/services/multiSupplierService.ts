@@ -317,6 +317,7 @@ export async function createRealtimeOrder(payload: {
   customerId?: string;
   customerName: string;
   phoneNumber: string;
+  preferredSupplierId?: string;
   deliveryAddress: {
     street: string;
     building?: string;
@@ -330,6 +331,8 @@ export async function createRealtimeOrder(payload: {
   };
   items: Array<{
     productId: string;
+    brand?: string;
+    cylinderSize?: string;
     purchaseType: 'refill' | 'complete_unit' | 'exchange';
     quantity: number;
   }>;
@@ -400,11 +403,15 @@ export async function respondToSupplierOffer(
   offerId: string,
   supplierId: string,
   action: 'ACCEPT' | 'REJECT',
-  reason?: string
+  reason?: string,
+  depotKey?: string
 ): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
   const response = await fetch(`/api/supplier/offers/${offerId}/respond`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ supplierId, action, reason }),
   });
   return response.json();
@@ -413,10 +420,17 @@ export async function respondToSupplierOffer(
 /**
  * Supplier updates delivery status (PREPARING, OUT_FOR_DELIVERY, DELIVERED)
  */
-export async function updateSupplierOrderStage(orderId: string, status: string): Promise<any> {
+export async function updateSupplierOrderStage(
+  orderId: string,
+  status: string,
+  depotKey?: string
+): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
   const response = await fetch(`/api/supplier/orders/${orderId}/stage`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ status }),
   });
   return response.json();
@@ -489,3 +503,205 @@ export function connectToRealtimeStream(
   }
 }
 
+export async function fetchDepotSnapshot(
+  supplierId: string = 'all',
+  depotKey?: string
+): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
+  const response = await fetch(
+    `/api/depot/snapshot?supplierId=${encodeURIComponent(supplierId)}`,
+    { headers }
+  );
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || `Failed loading depot snapshot (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function assignOrderRider(
+  orderId: string,
+  rider: {
+    id: string;
+    name: string;
+    phone: string;
+    plateNumber: string;
+    vehicleModel: string;
+  },
+  nextStage?: string,
+  depotKey?: string
+): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
+  const response = await fetch(`/api/depot/orders/${encodeURIComponent(orderId)}/assign-rider`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ rider, nextStage }),
+  });
+  return response.json();
+}
+
+export async function updateDepotInventoryStock(
+  supplierProductId: string,
+  updates: { stockRefill?: number; stockComplete?: number; isAvailable?: boolean },
+  depotKey?: string
+): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
+  const response = await fetch(`/api/depot/inventory/${encodeURIComponent(supplierProductId)}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(updates),
+  });
+  return response.json();
+}
+
+export async function toggleDepotStatus(
+  supplierId: string,
+  isOnline: boolean,
+  depotKey?: string
+): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (depotKey) headers['x-depot-key'] = depotKey;
+
+  const response = await fetch('/api/depot/status', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ supplierId, isOnline }),
+  });
+  return response.json();
+}
+
+// ==============================================================================
+// Private Depot Access Links Client API
+// ==============================================================================
+
+export interface DepotAccessLinkRecord {
+  id: string;
+  token: string;
+  supplierId: string;
+  supplierTradeName: string;
+  label: string;
+  isActive: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  accessCount: number;
+}
+
+export interface VerifiedDepotAccess {
+  valid: boolean;
+  linkId?: string;
+  supplierId?: string;
+  supplierTradeName?: string;
+  label?: string;
+  expiresAt?: string | null;
+  supplier?: SupplierBusiness | null;
+  error?: string;
+}
+
+export async function verifyDepotAccessKey(key: string): Promise<VerifiedDepotAccess> {
+  const response = await fetch(`/api/depot/access/verify?key=${encodeURIComponent(key)}`);
+  const data = await response.json().catch(() => ({ valid: false, error: 'Verification failed.' }));
+  if (!response.ok) {
+    return {
+      valid: false,
+      error: data.error || 'Private depot link is invalid or revoked.',
+    };
+  }
+  return data;
+}
+
+export async function fetchAdminDepotLinks(adminToken: string): Promise<{
+  links: DepotAccessLinkRecord[];
+  depots: SupplierBusiness[];
+}> {
+  const response = await fetch('/api/admin/depot-links', {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || 'Failed loading private depot links.');
+  }
+  return response.json();
+}
+
+export async function createAdminDepotLink(
+  adminToken: string,
+  payload: { supplierId: string; label: string; expiresInHours: number | null }
+): Promise<{ success: boolean; link: DepotAccessLinkRecord }> {
+  const response = await fetch('/api/admin/depot-links', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed generating private depot link.');
+  }
+  return data;
+}
+
+export async function revokeAdminDepotLink(
+  adminToken: string,
+  linkId: string,
+  isActive: boolean = false
+): Promise<{ success: boolean; link: DepotAccessLinkRecord }> {
+  const response = await fetch(`/api/admin/depot-links/${encodeURIComponent(linkId)}/revoke`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body: JSON.stringify({ isActive }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed updating private depot link.');
+  }
+  return data;
+}
+
+export async function regenerateAdminDepotLink(
+  adminToken: string,
+  linkId: string
+): Promise<{ success: boolean; link: DepotAccessLinkRecord }> {
+  const response = await fetch(`/api/admin/depot-links/${encodeURIComponent(linkId)}/regenerate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${adminToken}`,
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed regenerating private depot link.');
+  }
+  return data;
+}
+
+export async function deleteAdminDepotLink(
+  adminToken: string,
+  linkId: string
+): Promise<{ success: boolean }> {
+  const response = await fetch(`/api/admin/depot-links/${encodeURIComponent(linkId)}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed deleting private depot link.');
+  }
+  return data;
+}

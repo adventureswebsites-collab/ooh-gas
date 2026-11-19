@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
+import { OohGasLogo } from './components/BrandIdentities';
 import { AppIntroSplash } from './components/AppIntroSplash';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { MapboxDeliveryMap } from './components/map/MapboxDeliveryMap';
@@ -34,6 +35,7 @@ import {
   ScheduledOrderRecord,
 } from './components/SecondaryViews';
 import { SupplierDashboardModal } from './components/supplier/SupplierDashboardModal';
+import { DepotDashboardWorkspace } from './components/supplier/DepotDashboardWorkspace';
 import { AdminOrdersMatchingView } from './components/admin/AdminOrdersMatchingView';
 import { RiderDeliveryPortalModal } from './components/driver/RiderDeliveryPortalModal';
 import { AuthModal } from './components/auth/AuthModal';
@@ -46,7 +48,13 @@ import {
   subscribeToCustomerAuth,
   getCurrentCustomerSession,
 } from './services/customerAuthService';
-import { createRealtimeOrder, initiatePayHeroMpesa } from './services/multiSupplierService';
+import {
+  createRealtimeOrder,
+  initiatePayHeroMpesa,
+  connectToRealtimeStream,
+  verifyDepotAccessKey,
+  VerifiedDepotAccess,
+} from './services/multiSupplierService';
 import { MULTI_SUPPLIER_BUSINESSES, MASTER_PRODUCTS } from './data/multiSupplierData';
 import {
   MOCK_SUPPLIERS,
@@ -71,26 +79,62 @@ import {
   CoverageCheckResult,
   DeliveryTimingType,
 } from './types';
-import { Smartphone, Tablet, Monitor } from 'lucide-react';
+import { Smartphone, Tablet, Monitor, ShieldAlert, Lock, RefreshCw } from 'lucide-react';
 
 const FAVORITES_STORAGE_KEY = 'oohgas_favorite_suppliers';
 const SCHEDULED_STORAGE_KEY = 'oohgas_scheduled_orders';
 
+function extractDepotKeyFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const queryKey = params.get('depotKey');
+  if (queryKey && queryKey.trim()) return queryKey.trim();
+
+  const hash = window.location.hash;
+  if (hash.toLowerCase().startsWith('#depot-portal/')) {
+    const token = decodeURIComponent(hash.slice('#depot-portal/'.length).trim());
+    if (token) return token;
+  }
+  if (hash.toLowerCase().startsWith('#depot-portal?')) {
+    const hashParams = new URLSearchParams(hash.slice('#depot-portal?'.length));
+    const k = hashParams.get('key') || hashParams.get('depotKey');
+    if (k && k.trim()) return k.trim();
+  }
+  return null;
+}
+
 export default function App() {
+  // Private Depot Portal Link State (completely isolated from public customer website)
+  const [depotAccessKey, setDepotAccessKey] = useState<string | null>(() =>
+    extractDepotKeyFromUrl()
+  );
+  const [depotAccessState, setDepotAccessState] = useState<{
+    status: 'idle' | 'verifying' | 'valid' | 'invalid';
+    data?: VerifiedDepotAccess;
+    error?: string;
+  }>(() => (extractDepotKeyFromUrl() ? { status: 'verifying' } : { status: 'idle' }));
+
   // Customer Authentication & Session State
   const [customerSession, setCustomerSession] = useState<CustomerAuthSession | null>(() =>
     getCurrentCustomerSession()
   );
 
-  // App Intro Splash (Animated Gas Bike on Road shown on initial app open)
+  // App Intro Splash (Animated Gas Bike on Road shown on initial customer app open)
   const [showAppIntro, setShowAppIntro] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return !window.location.search.includes('skipIntro');
+    if (extractDepotKeyFromUrl()) return false;
+    const hash = window.location.hash.toLowerCase();
+    return (
+      !window.location.search.includes('skipIntro') &&
+      hash !== '#admin' &&
+      hash !== '#depot-links'
+    );
   });
 
-  // Welcome Screen (Screen 1) on fresh unauthenticated load
+  // Welcome Screen (Screen 1) on fresh unauthenticated customer load
   const [showWelcomeScreen, setShowWelcomeScreen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
+    if (extractDepotKeyFromUrl()) return false;
     const hasSession = Boolean(getCurrentCustomerSession());
     const hasHash = Boolean(window.location.hash);
     const skipParam = window.location.search.includes('skipWelcome');
@@ -202,7 +246,15 @@ export default function App() {
 
   // Supplier Portal, Admin Monitor, and Rider GPS Console Modal states
   const [isSupplierPortalOpen, setIsSupplierPortalOpen] = useState(false);
-  const [isAdminOrdersViewOpen, setIsAdminOrdersViewOpen] = useState(false);
+  const [isAdminOrdersViewOpen, setIsAdminOrdersViewOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash.toLowerCase();
+    return hash === '#admin' || hash === '#depot-links';
+  });
+  const [adminInitialTab, setAdminInitialTab] = useState<'orders' | 'depot_links'>(() => {
+    if (typeof window === 'undefined') return 'orders';
+    return window.location.hash.toLowerCase() === '#depot-links' ? 'depot_links' : 'orders';
+  });
   const [isRiderPortalOpen, setIsRiderPortalOpen] = useState(false);
 
   // Auth modals & redirects
@@ -268,6 +320,21 @@ export default function App() {
       } else if (hash === '#profile') {
         setAuthPage(null);
         setActiveTab('profile');
+      } else if (hash === '#depot-links') {
+        setAuthPage(null);
+        setShowWelcomeScreen(false);
+        setAdminInitialTab('depot_links');
+        setIsAdminOrdersViewOpen(true);
+      } else if (hash === '#admin') {
+        setAuthPage(null);
+        setShowWelcomeScreen(false);
+        setAdminInitialTab('orders');
+        setIsAdminOrdersViewOpen(true);
+      } else if (hash.startsWith('#depot-portal')) {
+        const key = extractDepotKeyFromUrl();
+        if (key) {
+          setDepotAccessKey(key);
+        }
       } else if (hash === '' || hash === '#home') {
         setAuthPage(null);
       }
@@ -277,12 +344,108 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
+  // Verify private depot access token when accessing via private depot link
+  const verifyCurrentDepotKey = useCallback(async (key: string) => {
+    setDepotAccessState({ status: 'verifying' });
+    try {
+      const result = await verifyDepotAccessKey(key);
+      if (result.valid && result.supplierId) {
+        setDepotAccessState({ status: 'valid', data: result });
+      } else {
+        setDepotAccessState({
+          status: 'invalid',
+          error: result.error || 'Private depot link is invalid, expired, or revoked.',
+        });
+      }
+    } catch (err: any) {
+      setDepotAccessState({
+        status: 'invalid',
+        error: err.message || 'Could not verify private depot link.',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!depotAccessKey) {
+      setDepotAccessState({ status: 'idle' });
+      return;
+    }
+    verifyCurrentDepotKey(depotAccessKey);
+  }, [depotAccessKey, verifyCurrentDepotKey]);
+
   useEffect(() => {
     const unsubscribe = subscribeToCustomerAuth((session) => {
       setCustomerSession(session);
     });
     return unsubscribe;
   }, []);
+
+  // Keep customer active order synchronized in real time via SSE
+  useEffect(() => {
+    if (depotAccessKey) return;
+
+    const unsubscribe = connectToRealtimeStream((event, payload) => {
+      if (event === 'supplier_accepted' && payload?.orderId) {
+        setActiveOrder((prev) => {
+          if (!prev || prev.orderId !== payload.orderId) return prev;
+          return {
+            ...prev,
+            stage: 'supplier_accepted',
+            orderStatus: 'SUPPLIER_ACCEPTED',
+            deliveryFee: payload.deliveryFee ?? prev.deliveryFee,
+            totalPrice: payload.totalAmount ?? prev.totalPrice,
+          };
+        });
+        setNotifications((prev) => [
+          {
+            id: `notif-acc-${Date.now()}`,
+            title: `${payload.tradeName || 'Depot'} Accepted Your Order`,
+            message: `Order #${payload.orderNumber || payload.orderId} is being prepared for dispatch (${payload.estimatedDeliveryMin || '20–30 min'}).`,
+            time: 'Just now',
+            type: 'order',
+            read: false,
+          },
+          ...prev,
+        ]);
+      } else if (event === 'rider_assigned' && payload?.orderId && payload?.rider) {
+        setActiveOrder((prev) => {
+          if (!prev || prev.orderId !== payload.orderId) return prev;
+          const baseRider =
+            prev.assignedRider ||
+            MOCK_RIDERS.find((r) => r.id === payload.rider.id) ||
+            MOCK_RIDERS[0];
+          return {
+            ...prev,
+            stage: payload.status === 'OUT_FOR_DELIVERY' ? 'in_transit' : 'rider_assigned',
+            orderStatus: payload.status || 'PREPARING',
+            assignedRider: {
+              ...baseRider,
+              id: payload.rider.id,
+              name: payload.rider.name,
+              phone: payload.rider.phone,
+              plateNumber: payload.rider.plateNumber,
+              vehicleModel: payload.rider.vehicleModel,
+            },
+          };
+        });
+      } else if (event === 'delivery_status_changed' && payload?.orderId) {
+        setActiveOrder((prev) => {
+          if (!prev || prev.orderId !== payload.orderId) return prev;
+          let nextStage = prev.stage;
+          if (payload.status === 'PREPARING') nextStage = 'rider_assigned';
+          else if (payload.status === 'OUT_FOR_DELIVERY') nextStage = 'in_transit';
+          else if (payload.status === 'DELIVERED') nextStage = 'completed';
+          return {
+            ...prev,
+            stage: nextStage,
+            orderStatus: payload.status,
+          };
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [depotAccessKey]);
 
   const handleOpenAuthPage = (
     mode: 'login' | 'signup' | 'reset-password' = 'login',
@@ -453,6 +616,7 @@ export default function App() {
         customerId: customerSession?.user.id,
         customerName: payload.deliveryDetails.fullName,
         phoneNumber: payload.deliveryDetails.phoneNumber,
+        preferredSupplierId: payload.selectedSupplier.id,
         deliveryAddress: {
           street: payload.deliveryDetails.building
             ? `${payload.deliveryDetails.building}, ${payload.deliveryDetails.estate}`
@@ -469,6 +633,8 @@ export default function App() {
         items: [
           {
             productId: matchedMasterProduct.id,
+            brand: targetBrand,
+            cylinderSize: payload.cylinderSize,
             purchaseType: payload.purchaseType === 'refill' ? 'refill' : 'complete_unit',
             quantity: payload.quantity,
           },
@@ -679,6 +845,8 @@ export default function App() {
         items: [
           {
             productId: matchedMasterProduct.id,
+            brand: targetBrand,
+            cylinderSize: orderSize,
             purchaseType: orderPurchaseType === 'refill' ? 'refill' : 'complete_unit',
             quantity: orderQuantity,
           },
@@ -852,6 +1020,88 @@ export default function App() {
     { label: '1024px', width: 1024, icon: Monitor, desc: 'Desktop' },
   ];
 
+  // ISOLATED PRIVATE DEPOT PORTAL (?depotKey=... or #depot-portal/...)
+  // Completely separated from the customer website so depots only manage their own orders & deliveries
+  if (depotAccessKey) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
+        <header className="sticky top-0 z-30 bg-white border-b border-neutral-200 px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <OohGasLogo showTagline={false} />
+            <span className="hidden sm:inline text-slate-300" aria-hidden="true">|</span>
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-bold text-[#0E8A45] truncate">
+              <Lock className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">
+                {depotAccessState.status === 'valid'
+                  ? `Private Depot Link · ${depotAccessState.data?.supplierTradeName}`
+                  : 'Private Depot Access'}
+              </span>
+            </span>
+          </div>
+
+          {depotAccessState.status === 'valid' && depotAccessState.data?.label && (
+            <span className="text-xs font-semibold text-slate-500 whitespace-nowrap shrink-0">
+              {depotAccessState.data.label}
+            </span>
+          )}
+        </header>
+
+        <main className="flex-1 w-full px-3 sm:px-6 py-4 flex flex-col">
+          {depotAccessState.status === 'verifying' && (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="bg-white border border-neutral-200 rounded-2xl p-8 text-center space-y-3 max-w-sm w-full">
+                <RefreshCw className="w-6 h-6 text-[#0E8A45] animate-spin mx-auto" />
+                <h1 className="text-sm font-extrabold text-[#0F172A]">
+                  Verifying Private Depot Link
+                </h1>
+                <p className="text-xs text-slate-500">
+                  Validating scoped access credentials for your depot dispatch desk.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {depotAccessState.status === 'invalid' && (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="bg-white border border-neutral-200 rounded-2xl p-8 text-center space-y-4 max-w-md w-full">
+                <div className="w-11 h-11 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <h1 className="text-base font-extrabold text-[#0F172A]">
+                    Private Depot Access Denied
+                  </h1>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {depotAccessState.error ||
+                      'This private depot link is invalid, expired, or has been revoked.'}
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => verifyCurrentDepotKey(depotAccessKey)}
+                    className="px-4 py-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Retry Verification
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {depotAccessState.status === 'valid' && depotAccessState.data?.supplierId && (
+            <DepotDashboardWorkspace
+              variant="full"
+              lockedSupplierId={depotAccessState.data.supplierId}
+              depotAccessKey={depotAccessKey}
+              privateLinkLabel={depotAccessState.data.label}
+            />
+          )}
+        </main>
+      </div>
+    );
+  }
+
   // SCREEN 0: Animated App Intro (Gas Bike with Gas Cylinder Moving on Road)
   if (showAppIntro) {
     return (
@@ -979,7 +1229,7 @@ export default function App() {
           maxWidth: simulatedWidth ? `${simulatedWidth}px` : '100%',
         }}
       >
-        {/* Top App Bar: OohGas Logo only, seamless over homepage header wave */}
+        {/* Customer Website Header (Strictly Customer-Facing) */}
         <Header
           transparentOverlay={isDestinationHomeView}
           onNavigateHome={() => {
@@ -991,16 +1241,18 @@ export default function App() {
           }}
         />
 
-        {/* Dynamic Main Body Content */}
-        <div
-          className={
-            isHomeMapView
-              ? 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-0 lg:px-6 pt-0 lg:py-5'
-              : isDestinationHomeView
-                ? 'w-full flex-1 flex flex-col px-0 py-0'
-                : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
-          }
-        >
+        <div className="w-full flex-1 flex flex-col">
+          <div className="flex-1 min-w-0 flex flex-col relative">
+            {/* Dynamic Main Body Content */}
+            <div
+              className={
+                isHomeMapView
+                  ? 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-0 lg:px-6 pt-0 lg:py-5'
+                  : isDestinationHomeView
+                    ? 'w-full flex-1 flex flex-col px-0 py-0'
+                    : 'w-full max-w-6xl mx-auto flex-1 flex flex-col px-4 sm:px-6 py-4 sm:py-5'
+              }
+            >
           {/* SCREEN 2: Welcome OTP Continuation / Reset Password Pages */}
           {authPage === 'login' && welcomePendingOtp && (
             <LoginPage
@@ -1286,7 +1538,14 @@ export default function App() {
                 onOpenNotifications={() => setActiveTab('notifications')}
                 onOpenRiderPortal={() => setIsRiderPortalOpen(true)}
                 onOpenSupplierPortal={() => setIsSupplierPortalOpen(true)}
-                onOpenAdminMonitor={() => setIsAdminOrdersViewOpen(true)}
+                onOpenAdminMonitor={() => {
+                  setAdminInitialTab('orders');
+                  setIsAdminOrdersViewOpen(true);
+                }}
+                onOpenDepotLinks={() => {
+                  setAdminInitialTab('depot_links');
+                  setIsAdminOrdersViewOpen(true);
+                }}
                 onOpenAuthModal={(mode) =>
                   handleOpenAuthPage(
                     mode === 'signup' ? 'signup' : 'login',
@@ -1297,23 +1556,25 @@ export default function App() {
               />
             </main>
           )}
-        </div>
+              </div>
 
-        {/* Mobile Bottom Navigation Bar: Home, Orders, Notifications, Profile */}
-        {!shouldHideMobileBottomNav && (
-          <BottomNav
-            activeTab={activeTab}
-            unreadNotifications={unreadCount}
-            onChangeTab={(tab) => {
-              setAuthPage(null);
-              setOrderFlowStep(null);
-              setIsLiveTrackerOpen(false);
-              if (tab === 'home') setHomeStep('destination');
-              if (tab === 'orders') setOrdersInitialFilter('all');
-              setActiveTab(tab);
-            }}
-          />
-        )}
+              {/* Mobile Bottom Navigation Bar: Home, Orders, Notifications, Profile */}
+              {!shouldHideMobileBottomNav && (
+                <BottomNav
+                  activeTab={activeTab}
+                  unreadNotifications={unreadCount}
+                  onChangeTab={(tab) => {
+                    setAuthPage(null);
+                    setOrderFlowStep(null);
+                    setIsLiveTrackerOpen(false);
+                    if (tab === 'home') setHomeStep('destination');
+                    if (tab === 'orders') setOrdersInitialFilter('all');
+                    setActiveTab(tab);
+                  }}
+                />
+              )}
+            </div>
+          </div>
       </div>
 
       {/* Interactive Modals */}
@@ -1415,6 +1676,7 @@ export default function App() {
 
       <AdminOrdersMatchingView
         isOpen={isAdminOrdersViewOpen}
+        initialTab={adminInitialTab}
         onClose={() => setIsAdminOrdersViewOpen(false)}
       />
 

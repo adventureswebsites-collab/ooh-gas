@@ -64,21 +64,32 @@ export const LiveDeliveryTracker: React.FC<LiveDeliveryTrackerProps> = ({
   const rider = order.assignedRider || riders[0];
   const supplier = order.matchedSupplier || suppliers[0];
 
+  const onUpdateStageRef = React.useRef(onUpdateStage);
+  onUpdateStageRef.current = onUpdateStage;
+
   // Subscribe to real-time order and delivery updates from the backend
   useEffect(() => {
     const unsubscribe = connectToRealtimeStream((event: string, payload: any) => {
       if (payload?.orderId && payload.orderId !== order.orderId) return;
 
-      if (event === 'delivery_status_changed' || event === 'order_status_changed') {
-        const nextStatus = payload.status || payload.orderStatus;
+      if (
+        event === 'supplier_accepted' ||
+        event === 'rider_assigned' ||
+        event === 'delivery_status_changed' ||
+        event === 'order_status_changed'
+      ) {
+        const nextStatus =
+          event === 'supplier_accepted'
+            ? 'SUPPLIER_ACCEPTED'
+            : payload.status || payload.orderStatus;
         if (nextStatus === 'SUPPLIER_ACCEPTED') {
-          onUpdateStage('supplier_accepted');
+          onUpdateStageRef.current('supplier_accepted');
         } else if (nextStatus === 'PREPARING') {
-          onUpdateStage('rider_assigned');
+          onUpdateStageRef.current('rider_assigned');
         } else if (nextStatus === 'OUT_FOR_DELIVERY') {
-          onUpdateStage('in_transit');
+          onUpdateStageRef.current('in_transit');
         } else if (nextStatus === 'DELIVERED') {
-          onUpdateStage('completed');
+          onUpdateStageRef.current('completed');
         }
         setLastUpdatedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
@@ -104,7 +115,7 @@ export const LiveDeliveryTracker: React.FC<LiveDeliveryTrackerProps> = ({
       unsubscribe();
       unsubscribeLocation();
     };
-  }, [order.orderId, onUpdateStage]);
+  }, [order.orderId]);
 
   // 6-step order tracking stage mapping
   const sixStages = [

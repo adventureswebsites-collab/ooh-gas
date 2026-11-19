@@ -28,6 +28,10 @@ import {
   subscribeToRealtimeEvents,
   recordDriverLocation,
   getDriverLocationForOrder,
+  assignRiderToOrder,
+  updateDepotInventory,
+  setDepotOnlineStatus,
+  getDepotDashboardSnapshot,
 } from './src/services/realtimeMatchingService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,8 +40,107 @@ const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const PERSIST_FILE = path.join(__dirname, 'src', 'data', 'persistedZones.json');
 const CUSTOMERS_PERSIST_FILE = path.join(__dirname, 'src', 'data', 'persistedCustomers.json');
+const DEPOT_LINKS_PERSIST_FILE = path.join(__dirname, 'src', 'data', 'persistedDepotLinks.json');
 const ADMIN_SECRET_TOKEN = 'admin_session_oohgas_2026_verified';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin2026';
+
+interface DepotAccessLinkRecord {
+  id: string;
+  token: string;
+  supplierId: string;
+  supplierTradeName: string;
+  label: string;
+  isActive: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  accessCount: number;
+}
+
+let depotAccessLinks: DepotAccessLinkRecord[] = [];
+
+function generateDepotAccessToken(): string {
+  return `depot_${crypto.randomBytes(18).toString('base64url')}`;
+}
+
+function saveDepotLinks(): void {
+  try {
+    fs.writeFileSync(DEPOT_LINKS_PERSIST_FILE, JSON.stringify(depotAccessLinks, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Depot Links DB] Failed persisting depot links:', err);
+  }
+}
+
+function loadDepotLinks(): void {
+  try {
+    if (fs.existsSync(DEPOT_LINKS_PERSIST_FILE)) {
+      const raw = fs.readFileSync(DEPOT_LINKS_PERSIST_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        depotAccessLinks = parsed;
+        console.log(`[Depot Links DB] Loaded ${depotAccessLinks.length} private depot links.`);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('[Depot Links DB] Failed reading persisted depot links, seeding defaults:', err);
+  }
+
+  const nowIso = new Date().toISOString();
+  depotAccessLinks = MULTI_SUPPLIER_BUSINESSES.map((b, idx) => ({
+    id: `dlink-${b.id}-${idx + 1}`,
+    token: generateDepotAccessToken(),
+    supplierId: b.id,
+    supplierTradeName: b.tradeName,
+    label: 'Main Dispatch Desk',
+    isActive: true,
+    expiresAt: null,
+    createdAt: nowIso,
+    lastUsedAt: null,
+    accessCount: 0,
+  }));
+  saveDepotLinks();
+}
+
+function resolveDepotAccessToken(rawKey?: string):
+  | { valid: true; record: DepotAccessLinkRecord }
+  | { valid: false; status: number; error: string } {
+  const clean = String(rawKey || '').trim();
+  if (!clean) {
+    return { valid: false, status: 401, error: 'A private depot access key is required.' };
+  }
+
+  const record = depotAccessLinks.find((l) => l.token === clean);
+  if (!record) {
+    return { valid: false, status: 401, error: 'Private depot access link is invalid or does not exist.' };
+  }
+
+  if (!record.isActive) {
+    return {
+      valid: false,
+      status: 401,
+      error: 'This private depot link has been revoked by platform administration.',
+    };
+  }
+
+  if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) {
+    return {
+      valid: false,
+      status: 401,
+      error: 'This private depot link has expired. Request a fresh link from platform administration.',
+    };
+  }
+
+  return { valid: true, record };
+}
+
+function extractDepotKeyFromRequest(req: Request): string {
+  const headerVal = req.headers['x-depot-key'];
+  if (typeof headerVal === 'string' && headerVal.trim()) return headerVal.trim();
+  const queryVal = req.query.depotKey || req.query.key;
+  if (typeof queryVal === 'string' && queryVal.trim()) return queryVal.trim();
+  return '';
+}
 
 // In-memory zone state loaded from file or default
 let deliveryZones: DeliveryZone[] = [];
@@ -186,6 +289,7 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
 async function startServer() {
   loadZones();
   loadServerCustomers();
+  loadDepotLinks();
 
   const app = express();
   app.use(express.json());
@@ -521,6 +625,7 @@ async function startServer() {
         customerId,
         customerName,
         phoneNumber,
+        preferredSupplierId,
         deliveryAddress,
         deliveryPoint,
         items,
@@ -545,6 +650,10 @@ async function startServer() {
           customerId: typeof customerId === 'string' && customerId.trim() ? customerId.trim() : undefined,
           customerName,
           phoneNumber,
+          preferredSupplierId:
+            typeof preferredSupplierId === 'string' && preferredSupplierId.trim()
+              ? preferredSupplierId.trim()
+              : undefined,
           deliveryAddress: deliveryAddress || { street: 'Main Rd', estate: 'Kilimani' },
           deliveryPoint,
           items,
@@ -629,7 +738,20 @@ async function startServer() {
 
   // 6. Supplier Dashboard: Fetch Pending Offers for Supplier
   app.get('/api/supplier/offers', (req: Request, res: Response) => {
-    const supplierId = req.query.supplierId as string;
+    const depotKey = extractDepotKeyFromRequest(req);
+    let supplierId = req.query.supplierId as string;
+
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ error: verified.error });
+      }
+      if (supplierId && supplierId !== verified.record.supplierId) {
+        return res.status(403).json({ error: 'Private depot key is not authorized for this supplier.' });
+      }
+      supplierId = verified.record.supplierId;
+    }
+
     if (!supplierId) {
       return res.status(400).json({ error: 'supplierId query parameter is required.' });
     }
@@ -659,6 +781,20 @@ async function startServer() {
   // 7. Supplier Responds to Offer (ACCEPT or REJECT)
   app.post('/api/supplier/offers/:offerId/respond', async (req: Request, res: Response) => {
     const { supplierId, action, reason } = req.body;
+    const depotKey = extractDepotKeyFromRequest(req);
+
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ success: false, error: verified.error });
+      }
+      if (supplierId && supplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Private depot key is not authorized to respond for another depot.',
+        });
+      }
+    }
 
     if (!supplierId || !action) {
       return res.status(400).json({ error: 'supplierId and action (ACCEPT or REJECT) are required.' });
@@ -679,6 +815,22 @@ async function startServer() {
   // 8. Supplier Updates Order Delivery Lifecycle (PREPARING, OUT_FOR_DELIVERY, DELIVERED)
   app.post('/api/supplier/orders/:orderId/stage', (req: Request, res: Response) => {
     const { status } = req.body;
+    const depotKey = extractDepotKeyFromRequest(req);
+
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ success: false, error: verified.error });
+      }
+      const existingOrder = getOrderById(req.params.orderId);
+      if (existingOrder && existingOrder.assignedSupplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Order is assigned to a different depot.',
+        });
+      }
+    }
+
     if (!status) {
       return res.status(400).json({ error: 'New order status is required.' });
     }
@@ -688,6 +840,136 @@ async function startServer() {
       return res.status(400).json(result);
     }
 
+    res.json(result);
+  });
+
+  // 8.0 Verify Private Depot Access Link Token
+  app.get('/api/depot/access/verify', (req: Request, res: Response) => {
+    const key = extractDepotKeyFromRequest(req);
+    const verified = resolveDepotAccessToken(key);
+    if (!verified.valid) {
+      return res.status(verified.status).json({ valid: false, error: verified.error });
+    }
+
+    const { record } = verified;
+    record.lastUsedAt = new Date().toISOString();
+    record.accessCount = (record.accessCount || 0) + 1;
+    saveDepotLinks();
+
+    const supplier = MULTI_SUPPLIER_BUSINESSES.find((b) => b.id === record.supplierId) || null;
+    return res.json({
+      valid: true,
+      linkId: record.id,
+      supplierId: record.supplierId,
+      supplierTradeName: supplier?.tradeName || record.supplierTradeName,
+      label: record.label,
+      expiresAt: record.expiresAt,
+      supplier,
+    });
+  });
+
+  // 8.1 Depot Dashboard Full Live Snapshot (offers, orders, inventory, status & KPIs)
+  app.get('/api/depot/snapshot', (req: Request, res: Response) => {
+    const depotKey = extractDepotKeyFromRequest(req);
+    let supplierId = String(req.query.supplierId || 'all');
+
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ error: verified.error });
+      }
+      if (supplierId && supplierId !== 'all' && supplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          error: 'Private depot key is locked to a single depot and cannot view other depots.',
+        });
+      }
+      supplierId = verified.record.supplierId;
+    }
+
+    const snapshot = getDepotDashboardSnapshot(supplierId);
+    res.json(snapshot);
+  });
+
+  // 8.2 Depot Assigns Rider & Optional Delivery Stage Transition
+  app.post('/api/depot/orders/:orderId/assign-rider', (req: Request, res: Response) => {
+    const depotKey = extractDepotKeyFromRequest(req);
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ success: false, error: verified.error });
+      }
+      const existingOrder = getOrderById(req.params.orderId);
+      if (existingOrder && existingOrder.assignedSupplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot assign rider to an order outside your depot.',
+        });
+      }
+    }
+
+    const { rider, nextStage } = req.body || {};
+    if (!rider || !rider.id || !rider.name) {
+      return res.status(400).json({ error: 'Valid rider details are required.' });
+    }
+    const result = assignRiderToOrder(req.params.orderId, rider, nextStage);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  });
+
+  // 8.3 Depot Updates Real-Time Cylinder Stock / Availability
+  app.post('/api/depot/inventory/:supplierProductId', (req: Request, res: Response) => {
+    const depotKey = extractDepotKeyFromRequest(req);
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ success: false, error: verified.error });
+      }
+      const targetSku = MULTI_SUPPLIER_PRODUCTS.find(
+        (p) => p.id === req.params.supplierProductId
+      );
+      if (targetSku && targetSku.supplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot update stock inventory belonging to another depot.',
+        });
+      }
+    }
+
+    const { stockRefill, stockComplete, isAvailable } = req.body || {};
+    const result = updateDepotInventory(req.params.supplierProductId, {
+      stockRefill,
+      stockComplete,
+      isAvailable,
+    });
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+    res.json(result);
+  });
+
+  // 8.4 Depot Toggles Online / Accepting Orders Status
+  app.post('/api/depot/status', (req: Request, res: Response) => {
+    const { supplierId, isOnline } = req.body || {};
+    const depotKey = extractDepotKeyFromRequest(req);
+    if (depotKey) {
+      const verified = resolveDepotAccessToken(depotKey);
+      if (!verified.valid) {
+        return res.status(verified.status).json({ success: false, error: verified.error });
+      }
+      if (supplierId && supplierId !== verified.record.supplierId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot toggle status for another depot.',
+        });
+      }
+    }
+
+    if (!supplierId || typeof isOnline !== 'boolean') {
+      return res.status(400).json({ error: 'supplierId and boolean isOnline are required.' });
+    }
+    const result = setDepotOnlineStatus(supplierId, isOnline);
     res.json(result);
   });
 
@@ -1267,6 +1549,95 @@ async function startServer() {
     deliveryZones = JSON.parse(JSON.stringify(INITIAL_DELIVERY_ZONES));
     saveZones();
     res.json({ success: true, count: deliveryZones.length, zones: deliveryZones });
+  });
+
+  // ==========================================
+  // Protected Admin Private Depot Access Links Endpoints
+  // ==========================================
+
+  app.get('/api/admin/depot-links', requireAdminAuth, (_req: Request, res: Response) => {
+    const sorted = [...depotAccessLinks].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    res.json({
+      links: sorted,
+      depots: MULTI_SUPPLIER_BUSINESSES,
+    });
+  });
+
+  app.post('/api/admin/depot-links', requireAdminAuth, (req: Request, res: Response) => {
+    const { supplierId, label, expiresInHours } = req.body || {};
+    const business = MULTI_SUPPLIER_BUSINESSES.find((b) => b.id === supplierId);
+    if (!business) {
+      return res.status(400).json({ error: 'Selected depot station was not found.' });
+    }
+
+    const cleanLabel = String(label || '').trim() || 'Dispatch Desk';
+    let expiresAt: string | null = null;
+    if (typeof expiresInHours === 'number' && isFinite(expiresInHours) && expiresInHours > 0) {
+      expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000).toISOString();
+    }
+
+    const newLink: DepotAccessLinkRecord = {
+      id: `dlink-${crypto.randomUUID()}`,
+      token: generateDepotAccessToken(),
+      supplierId: business.id,
+      supplierTradeName: business.tradeName,
+      label: cleanLabel,
+      isActive: true,
+      expiresAt,
+      createdAt: new Date().toISOString(),
+      lastUsedAt: null,
+      accessCount: 0,
+    };
+
+    depotAccessLinks.unshift(newLink);
+    saveDepotLinks();
+
+    return res.status(201).json({ success: true, link: newLink });
+  });
+
+  app.post('/api/admin/depot-links/:id/revoke', requireAdminAuth, (req: Request, res: Response) => {
+    const target = depotAccessLinks.find((l) => l.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Private depot link not found.' });
+    }
+
+    const nextActive = typeof req.body?.isActive === 'boolean' ? req.body.isActive : false;
+    target.isActive = nextActive;
+    saveDepotLinks();
+    return res.json({ success: true, link: target });
+  });
+
+  app.post('/api/admin/depot-links/:id/regenerate', requireAdminAuth, (req: Request, res: Response) => {
+    const target = depotAccessLinks.find((l) => l.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'Private depot link not found.' });
+    }
+
+    target.token = generateDepotAccessToken();
+    target.isActive = true;
+    target.lastUsedAt = null;
+    target.accessCount = 0;
+
+    if (typeof req.body?.expiresInHours === 'number' && req.body.expiresInHours > 0) {
+      target.expiresAt = new Date(Date.now() + req.body.expiresInHours * 3600 * 1000).toISOString();
+    } else if (req.body?.expiresInHours === null) {
+      target.expiresAt = null;
+    }
+
+    saveDepotLinks();
+    return res.json({ success: true, link: target });
+  });
+
+  app.delete('/api/admin/depot-links/:id', requireAdminAuth, (req: Request, res: Response) => {
+    const prevLen = depotAccessLinks.length;
+    depotAccessLinks = depotAccessLinks.filter((l) => l.id !== req.params.id);
+    if (depotAccessLinks.length === prevLen) {
+      return res.status(404).json({ error: 'Private depot link not found.' });
+    }
+    saveDepotLinks();
+    return res.json({ success: true });
   });
 
   // ==========================================

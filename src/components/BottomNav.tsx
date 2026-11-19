@@ -15,12 +15,14 @@ interface BottomNavProps {
   activeTab: NavTab;
   onChangeTab: (tab: NavTab) => void;
   unreadNotifications?: number;
+  containedInPane?: boolean;
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({
   activeTab,
   onChangeTab,
   unreadNotifications = 0,
+  containedInPane = false,
 }) => {
   const tabs = [
     { id: 'home' as NavTab, label: 'Home', icon: Home },
@@ -36,7 +38,11 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 md:bottom-4 md:left-1/2 md:-translate-x-1/2 md:right-auto md:w-[440px] z-40 bg-white/95 backdrop-blur-md border-t md:border border-neutral-200/90 md:rounded-2xl shadow-[0_-4px_16px_rgba(0,0,0,0.04)] md:shadow-[0_10px_30px_rgba(15,23,42,0.08)]"
+      className={
+        containedInPane
+          ? 'sticky bottom-2 mx-auto w-full max-w-[440px] z-30 bg-white/95 backdrop-blur-md border border-neutral-200/90 rounded-2xl shadow-[0_10px_30px_rgba(15,23,42,0.08)] mb-2'
+          : 'fixed bottom-0 left-0 right-0 md:bottom-4 md:left-1/2 md:-translate-x-1/2 md:right-auto md:w-[440px] z-40 bg-white/95 backdrop-blur-md border-t md:border border-neutral-200/90 md:rounded-2xl shadow-[0_-4px_16px_rgba(0,0,0,0.04)] md:shadow-[0_10px_30px_rgba(15,23,42,0.08)]'
+      }
       style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.25rem)' }}
       aria-label="Primary navigation"
     >

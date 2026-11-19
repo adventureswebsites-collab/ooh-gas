@@ -673,25 +673,13 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
               </p>
             </div>
           </div>
-        ) : activePinnedDepot ? (
-          <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-10 max-w-[92%]">
-            <div className="bg-[#0E8A45] text-white text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 whitespace-nowrap truncate">
-              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">
-                {activePinnedDepot.name} ·{' '}
-                {activeRouteMetrics
-                  ? `${activeRouteMetrics.distanceKm} km · ~${activeRouteMetrics.durationMin} min`
-                  : `${activePinnedDepot.calculatedDistanceKm} km`}
-              </span>
-            </div>
-          </div>
-        ) : (
+        ) : !activePinnedDepot ? (
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-10 max-w-[90%]">
             <div className="bg-neutral-900/85 backdrop-blur-md text-white text-[11px] font-semibold px-3 py-1.5 rounded-full shadow-md whitespace-nowrap truncate">
               Tap anywhere or drag the pin inside a green zone
             </div>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Bottom "Choose your gas" Sheet with Amount, Gas Company & Cylinder kg */}

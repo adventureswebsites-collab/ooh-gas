@@ -30,6 +30,7 @@ import {
   Bike,
   Store,
   Shield,
+  KeyRound,
 } from 'lucide-react';
 import { SupplierLettermark } from './BrandIdentities';
 import {
@@ -93,6 +94,7 @@ interface ViewProps {
   onOpenRiderPortal?: () => void;
   onOpenSupplierPortal?: () => void;
   onOpenAdminMonitor?: () => void;
+  onOpenDepotLinks?: () => void;
 }
 
 // ==============================================================================
@@ -927,6 +929,7 @@ export const ProfileView: React.FC<ViewProps> = ({
   onOpenRiderPortal,
   onOpenSupplierPortal,
   onOpenAdminMonitor,
+  onOpenDepotLinks,
 }) => {
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -1549,11 +1552,25 @@ export const ProfileView: React.FC<ViewProps> = ({
       </div>
 
       {/* Partner & Operations Portals inside Profile Settings */}
-      {(onOpenRiderPortal || onOpenSupplierPortal || onOpenAdminMonitor) && (
+      {(onOpenRiderPortal || onOpenSupplierPortal || onOpenAdminMonitor || onOpenDepotLinks) && (
         <div className="rounded-3xl border border-neutral-200/80 bg-white p-4 sm:p-5 shadow-2xs space-y-1">
           <h4 className="text-xs font-extrabold text-[#6B7280] uppercase tracking-wider px-1 pb-2">
             Partner &amp; Operations
           </h4>
+
+          {onOpenDepotLinks && (
+            <button
+              type="button"
+              onClick={onOpenDepotLinks}
+              className="w-full px-3 py-2.5 rounded-xl hover:bg-[#EDF6F1] flex items-center justify-between text-xs font-bold text-[#0E8A45] cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <KeyRound className="w-4 h-4 text-[#0E8A45]" />
+                <span>Private Depot Link Generator</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-[#0E8A45]" />
+            </button>
+          )}
 
           {onOpenRiderPortal && (
             <button

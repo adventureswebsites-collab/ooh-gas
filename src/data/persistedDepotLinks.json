@@ -1,0 +1,74 @@
+[
+  {
+    "id": "dlink-sup-kgas-kilimani-1",
+    "token": "depot_y8hOVioOIJiAlheAv0xY-T32",
+    "supplierId": "sup-kgas-kilimani",
+    "supplierTradeName": "K-Gas Hub — Kilimani",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  },
+  {
+    "id": "dlink-sup-total-westlands-2",
+    "token": "depot_MtKWjNA0s0FXfLOF0UPDUWdO",
+    "supplierId": "sup-total-westlands",
+    "supplierTradeName": "TotalEnergies Service Station — Westlands",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  },
+  {
+    "id": "dlink-sup-rubis-lavington-3",
+    "token": "depot_rsWxeqsI7Se8nC5rVMyxIZ5X",
+    "supplierId": "sup-rubis-lavington",
+    "supplierTradeName": "Rubis Gas Point — Lavington Green",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  },
+  {
+    "id": "dlink-sup-hass-southb-4",
+    "token": "depot_EjEasn04ZhZFapgfQcpKj8s-",
+    "supplierId": "sup-hass-southb",
+    "supplierTradeName": "Hass Gas Hub — South B",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  },
+  {
+    "id": "dlink-sup-total-nyali-5",
+    "token": "depot_O8GAv6gTVm_XS9dE8EtGh_4w",
+    "supplierId": "sup-total-nyali",
+    "supplierTradeName": "TotalEnergies Depot — Nyali Mombasa",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  },
+  {
+    "id": "dlink-sup-kgas-kisumu-6",
+    "token": "depot_drB4Zq9gFqCgzLRr4EQ5bK2h",
+    "supplierId": "sup-kgas-kisumu",
+    "supplierTradeName": "K-Gas Depot — Kisumu Milimani",
+    "label": "Main Dispatch Desk",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "2026-11-19T11:11:58.593Z",
+    "lastUsedAt": null,
+    "accessCount": 0
+  }
+]

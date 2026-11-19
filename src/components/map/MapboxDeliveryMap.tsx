@@ -35,7 +35,6 @@ import {
   Key,
   Layers,
   Loader2,
-  Compass,
   X,
   Shield,
   Check,
@@ -171,50 +170,47 @@ function createGasCylinderMarkerElement(
 ): HTMLDivElement {
   const container = document.createElement('div');
   container.className = `ooh-gas-depot-marker animate-marker-pop cursor-pointer ${
-    isOutOfArea ? 'opacity-55 z-10' : isHighlighted ? 'z-30' : 'z-20'
+    isOutOfArea ? 'opacity-50 z-10' : isHighlighted ? 'z-30' : 'z-20'
   }`;
 
-  const pinBg = isOutOfArea ? '#64748B' : isHighlighted ? '#0E8A45' : '#16A34A';
-  const shortName =
+  const pinBg = isOutOfArea ? '#64748B' : isHighlighted ? '#0E8A45' : '#15803D';
+  const shortBrand =
     sup.brand === 'K-Gas'
-      ? 'K-Gas Depot'
+      ? 'K-Gas'
       : sup.brand === 'TotalEnergies'
-      ? 'TotalEnergies'
+      ? 'Total'
       : sup.brand === 'Shell Gas'
-      ? 'Shell Gas'
+      ? 'Shell'
       : sup.name.split(' ')[0];
 
-  const calloutHtml = showCallout
-    ? `<div style="margin-left: 6px; background: ${
-        isHighlighted ? '#0E8A45' : 'rgba(255,255,255,0.97)'
-      }; border: 1.5px solid ${
-        isHighlighted ? '#ffffff' : 'rgba(0,0,0,0.06)'
-      }; border-radius: 12px; padding: 5px 10px; box-shadow: ${
-        isHighlighted ? '0 8px 20px rgba(14,138,69,0.35)' : '0 4px 14px rgba(0,0,0,0.12)'
-      }; white-space: nowrap; text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;">
-        <div style="font-size: 11px; font-weight: 800; color: ${
-          isHighlighted ? '#ffffff' : '#15191C'
-        }; line-height: 1.15;">${isHighlighted ? `✓ ${shortName}` : shortName}</div>
-        <div style="font-size: 10px; font-weight: 700; color: ${
-          isHighlighted ? '#D1FAE5' : '#6B7280'
-        }; line-height: 1.2;">${
-          isHighlighted ? `Depot Found · ${sup.distanceKm} km` : `${sup.distanceKm} km`
-        }</div>
-      </div>`
-    : '';
+  const calloutHtml =
+    showCallout && isHighlighted
+      ? `<div style="margin-left: 6px; background: #0E8A45; border: 1.5px solid #ffffff; border-radius: 12px; padding: 5px 10px; box-shadow: 0 8px 22px rgba(14,138,69,0.34); white-space: nowrap; text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;">
+          <div style="font-size: 11px; font-weight: 800; color: #ffffff; line-height: 1.15;">${sup.name.split('—')[0].trim()}</div>
+          <div style="font-size: 10px; font-weight: 700; color: #D1FAE5; line-height: 1.2;">Pickup Depot · ${sup.distanceKm} km</div>
+        </div>`
+      : showCallout && !isOutOfArea
+      ? `<div style="margin-left: 4px; background: rgba(255,255,255,0.96); border: 1px solid rgba(15,23,42,0.08); border-radius: 9999px; padding: 2px 7px; box-shadow: 0 2px 8px rgba(15,23,42,0.12); white-space: nowrap; font-family: 'Plus Jakarta Sans', sans-serif;">
+          <span style="font-size: 10px; font-weight: 800; color: #15191C;">${shortBrand}</span>
+        </div>`
+      : '';
 
   const pulseHalo = isHighlighted
-    ? `<div style="position: absolute; left: -6px; top: -2px; width: 46px; height: 46px; border-radius: 9999px; background: rgba(14,138,69,0.24); animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; pointer-events: none;"></div>`
+    ? `<div style="position: absolute; left: -6px; top: -2px; width: 46px; height: 46px; border-radius: 9999px; background: rgba(14,138,69,0.22); animation: ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite; pointer-events: none;"></div>`
     : '';
 
   container.innerHTML = `
     <div style="position: relative; display: flex; align-items: center; user-select: none;">
       ${pulseHalo}
-      <div style="position: relative; width: 34px; height: 42px; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.24)); transform: ${
-        isHighlighted ? 'scale(1.12)' : 'scale(1)'
-      }; transition: transform 0.2s ease;">
-        <svg width="34" height="42" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M18 1C8.611 1 1 8.611 1 18C1 29.75 18 43 18 43C18 43 35 29.75 35 18C35 8.611 27.389 1 18 1Z" fill="${pinBg}" stroke="#ffffff" stroke-width="2"/>
+      <div style="position: relative; width: ${isHighlighted ? 34 : 28}px; height: ${
+    isHighlighted ? 42 : 35
+  }px; display: flex; flex-direction: column; align-items: center; filter: drop-shadow(0 4px 8px rgba(15,23,42,0.25)); transform: ${
+    isHighlighted ? 'scale(1.08)' : 'scale(1)'
+  }; transition: transform 0.2s ease;">
+        <svg width="${isHighlighted ? 34 : 28}" height="${
+    isHighlighted ? 42 : 35
+  }" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M18 1C8.611 1 1 8.611 1 18C1 29.75 18 43 18 43C18 43 35 29.75 35 18C35 8.611 27.389 1 18 1Z" fill="${pinBg}" stroke="#ffffff" stroke-width="2.2"/>
           <path d="M15 9.5H21M16.2 9.5V11.2H19.8V9.5" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
           <rect x="12.5" y="11.5" width="11" height="14" rx="3" fill="#ffffff"/>
           <path d="M12.5 16.5H23.5" stroke="${pinBg}" stroke-width="1.4"/>
@@ -362,8 +358,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [isLayersMenuOpen, setIsLayersMenuOpen] = useState(false);
 
-  // Map style state: Streets (Google Maps clean light road tiles) vs Minimal Light
-  const [mapStyle, setMapStyle] = useState<'streets' | 'light'>('streets');
+  // Map style state: Streets (Google Maps clean road tiles), Minimal Light, or Satellite
+  const [mapStyle, setMapStyle] = useState<'streets' | 'light' | 'satellite'>('streets');
   const [showZonesOverlay, setShowZonesOverlay] = useState(!isHomeHero);
 
   // Interactive Admin Polygon Vertex Editor on Map
@@ -404,6 +400,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const leafletRouteLayerRef = useRef<L.Polyline | null>(null);
   const leafletPreviewCasingRef = useRef<L.Polyline | null>(null);
   const leafletPreviewLineRef = useRef<L.Polyline | null>(null);
+  const leafletPreviewOriginDotRef = useRef<L.CircleMarker | null>(null);
   const leafletZoneLayersRef = useRef<L.Polygon[]>([]);
   const leafletVertexMarkersRef = useRef<L.Marker[]>([]);
 
@@ -618,6 +615,10 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       zoom: isDedicatedTracking ? 14 : 14.8,
       zoomControl: false,
       attributionControl: false,
+      preferCanvas: true,
+      zoomSnap: 0.25,
+      zoomDelta: 0.5,
+      wheelPxPerZoomLevel: 90,
     });
 
     leafletMapRef.current = lMap;
@@ -632,49 +633,58 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         tile.height = size.y;
         const ctx = tile.getContext('2d');
         if (ctx) {
-          ctx.fillStyle = '#F2F4F0';
+          ctx.fillStyle = mapStyle === 'satellite' ? '#1E293B' : '#F3F5F2';
           ctx.fillRect(0, 0, size.x, size.y);
 
-          // Deterministic soft green park patch on select blocks
-          const seed = Math.abs(Math.sin(coords.x * 12.9898 + coords.y * 78.233) * 43758.5453);
-          const frac = seed - Math.floor(seed);
-          if (frac > 0.62) {
-            ctx.fillStyle = '#DCEFE2';
-            ctx.fillRect(24, 24, size.x * 0.45, size.y * 0.36);
-          }
+          if (mapStyle !== 'satellite') {
+            const seed = Math.abs(Math.sin(coords.x * 12.9898 + coords.y * 78.233) * 43758.5453);
+            const frac = seed - Math.floor(seed);
+            if (frac > 0.6) {
+              ctx.fillStyle = '#DFF1E5';
+              ctx.fillRect(20, 20, size.x * 0.44, size.y * 0.34);
+            }
 
-          // Subtle residential block polygons
-          ctx.fillStyle = '#EAECE7';
-          ctx.fillRect(16, 16, 86, 68);
-          ctx.fillRect(136, 18, 98, 72);
-          ctx.fillRect(18, 128, 92, 96);
-          ctx.fillRect(142, 134, 90, 88);
+            // Crisp architectural urban blocks
+            ctx.fillStyle = '#EAECE8';
+            ctx.fillRect(16, 16, 86, 68);
+            ctx.fillRect(136, 18, 98, 72);
+            ctx.fillRect(18, 128, 92, 96);
+            ctx.fillRect(142, 134, 90, 88);
 
-          // Secondary street grid lines
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = 4;
-          ctx.beginPath();
-          ctx.moveTo(0, 106);
-          ctx.lineTo(size.x, 106);
-          ctx.moveTo(120, 0);
-          ctx.lineTo(120, size.y);
-          ctx.stroke();
-
-          // Primary arterial road highlight
-          if ((coords.x + coords.y) % 2 === 0) {
-            ctx.strokeStyle = '#E2DDD1';
-            ctx.lineWidth = 8;
+            // Road casing + crisp white street network
+            ctx.strokeStyle = '#E1E5E0';
+            ctx.lineWidth = 6;
             ctx.beginPath();
-            ctx.moveTo(0, 214);
-            ctx.lineTo(size.x, 204);
+            ctx.moveTo(0, 106);
+            ctx.lineTo(size.x, 106);
+            ctx.moveTo(120, 0);
+            ctx.lineTo(120, size.y);
             ctx.stroke();
 
-            ctx.strokeStyle = '#FFFDF7';
-            ctx.lineWidth = 5;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 4;
             ctx.beginPath();
-            ctx.moveTo(0, 214);
-            ctx.lineTo(size.x, 204);
+            ctx.moveTo(0, 106);
+            ctx.lineTo(size.x, 106);
+            ctx.moveTo(120, 0);
+            ctx.lineTo(120, size.y);
             ctx.stroke();
+
+            if ((coords.x + coords.y) % 2 === 0) {
+              ctx.strokeStyle = '#DFD9CA';
+              ctx.lineWidth = 9;
+              ctx.beginPath();
+              ctx.moveTo(0, 214);
+              ctx.lineTo(size.x, 204);
+              ctx.stroke();
+
+              ctx.strokeStyle = '#FFFDF5';
+              ctx.lineWidth = 6;
+              ctx.beginPath();
+              ctx.moveTo(0, 214);
+              ctx.lineTo(size.x, 204);
+              ctx.stroke();
+            }
           }
         }
         return tile;
@@ -683,17 +693,21 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     const fallbackGrid = new (StreetGridFallbackLayer as any)({ zIndex: 0 });
     fallbackGrid.addTo(lMap);
 
-    const tileUrl = activeToken
-      ? `https://api.mapbox.com/styles/v1/mapbox/${
-          mapStyle === 'streets' ? 'streets-v12' : 'light-v11'
-        }/tiles/256/{z}/{x}/{y}?access_token=${activeToken}`
-      : mapStyle === 'streets'
-      ? 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+    const tileUrl =
+      mapStyle === 'satellite'
+        ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        : activeToken
+        ? `https://api.mapbox.com/styles/v1/mapbox/${
+            mapStyle === 'streets' ? 'streets-v12' : 'light-v11'
+          }/tiles/256/{z}/{x}/{y}@2x?access_token=${activeToken}`
+        : mapStyle === 'streets'
+        ? 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 
     const tiles = L.tileLayer(tileUrl, {
       maxZoom: 19,
       zIndex: 2,
+      detectRetina: true,
       attribution: '© Carto © OpenStreetMap',
     }).addTo(lMap);
 
@@ -833,23 +847,27 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     }
 
     const isOutOfZone = coverageResult && !coverageResult.isCovered;
+    const pinColor = isOutOfZone ? '#DC2626' : '#111827';
+    const haloColor = isOutOfZone ? 'rgba(220,38,38,0.16)' : 'rgba(14,138,69,0.16)';
+    const badgeBg = isOutOfZone ? '#DC2626' : '#111827';
+    const badgeLabel = isOutOfZone ? 'Outside zone' : 'Deliver here';
     const customerIcon = L.divIcon({
       className: 'leaflet-custom-customer-icon',
       html: `
-        <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; cursor: grab;">
-          <div style="position: absolute; inset: 4px; border-radius: 9999px; background: ${
-            isOutOfZone ? 'rgba(220,38,38,0.12)' : 'rgba(37, 99, 235, 0.14)'
-          };"></div>
-          <div style="position: absolute; inset: 14px; border-radius: 9999px; background: ${
-            isOutOfZone ? 'rgba(220,38,38,0.24)' : 'rgba(37, 99, 235, 0.24)'
-          };"></div>
-          <div style="position: relative; background-color: ${
-            isOutOfZone ? '#dc2626' : '#2563EB'
-          }; border: 3.5px solid #ffffff; width: 22px; height: 22px; border-radius: 9999px; box-shadow: 0 3px 10px rgba(37,99,235,0.45);"></div>
+        <div style="position: relative; width: 96px; height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; cursor: grab; user-select: none;">
+          <div style="position: absolute; top: 2px; background: ${badgeBg}; color: #ffffff; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 9.5px; font-weight: 800; padding: 2.5px 8px; border-radius: 9999px; white-space: nowrap; box-shadow: 0 3px 10px rgba(15,23,42,0.24); border: 1.5px solid #ffffff;">
+            ${badgeLabel}
+          </div>
+          <div style="position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; inset: 3px; border-radius: 9999px; background: ${haloColor};"></div>
+            <div style="position: relative; width: 22px; height: 22px; border-radius: 9999px; background: ${pinColor}; border: 3px solid #ffffff; box-shadow: 0 4px 12px rgba(15,23,42,0.34); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 6px; height: 6px; border-radius: 9999px; background: #22C55E;"></div>
+            </div>
+          </div>
         </div>
       `,
-      iconSize: [64, 64],
-      iconAnchor: [32, 32],
+      iconSize: [96, 74],
+      iconAnchor: [48, 53],
     });
 
     const marker = L.marker([customerCoords.lat, customerCoords.lng], {
@@ -937,6 +955,10 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       leafletPreviewLineRef.current.remove();
       leafletPreviewLineRef.current = null;
     }
+    if (leafletPreviewOriginDotRef.current) {
+      leafletPreviewOriginDotRef.current.remove();
+      leafletPreviewOriginDotRef.current = null;
+    }
 
     if (!isDedicatedTracking && !adminEditingZone) {
       const foundDepot = highlightedSupplierId
@@ -969,18 +991,26 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
           if (activeRoadRoute) {
             leafletPreviewCasingRef.current = L.polyline(routeLatLngs, {
               color: '#064E3B',
-              weight: 8,
-              opacity: 0.25,
+              weight: 8.5,
+              opacity: 0.28,
               lineCap: 'round',
               lineJoin: 'round',
             }).addTo(lMap);
 
             leafletPreviewLineRef.current = L.polyline(routeLatLngs, {
-              color: '#0E8A45',
+              color: '#10B981',
               weight: 4.5,
-              opacity: 0.96,
+              opacity: 0.98,
               lineCap: 'round',
               lineJoin: 'round',
+            }).addTo(lMap);
+
+            leafletPreviewOriginDotRef.current = L.circleMarker(routeLatLngs[0], {
+              radius: 5.5,
+              color: '#ffffff',
+              weight: 2.5,
+              fillColor: '#0E8A45',
+              fillOpacity: 1,
             }).addTo(lMap);
           }
 
@@ -990,7 +1020,12 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
             const bounds = L.latLngBounds(routeLatLngs);
             const refreshedSize = lMap.getSize();
             if (refreshedSize.x > 0 && refreshedSize.y > 0) {
-              lMap.fitBounds(bounds, { padding: [65, 65], maxZoom: 15.5, animate: true });
+              lMap.fitBounds(bounds, {
+                paddingTopLeft: [48, 56],
+                paddingBottomRight: [64, 58],
+                maxZoom: 15.5,
+                animate: true,
+              });
             } else {
               lMap.setView([customerCoords.lat, customerCoords.lng], 14, { animate: false });
             }
@@ -1190,7 +1225,9 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     mapboxgl.accessToken = activeToken;
 
     const styleUrl =
-      mapStyle === 'streets'
+      mapStyle === 'satellite'
+        ? 'mapbox://styles/mapbox/satellite-streets-v12'
+        : mapStyle === 'streets'
         ? 'mapbox://styles/mapbox/streets-v12'
         : 'mapbox://styles/mapbox/light-v11';
 
@@ -1270,19 +1307,24 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       el = createUberDestinationMarkerElement(destinationLabel);
     } else {
       const isOutOfZone = coverageResult && !coverageResult.isCovered;
-      const dotColor = isOutOfZone ? '#dc2626' : '#2563EB';
+      const pinColor = isOutOfZone ? '#DC2626' : '#111827';
+      const haloColor = isOutOfZone ? 'rgba(220,38,38,0.16)' : 'rgba(14,138,69,0.16)';
+      const badgeBg = isOutOfZone ? '#DC2626' : '#111827';
+      const badgeLabel = isOutOfZone ? 'Outside zone' : 'Deliver here';
 
       el = document.createElement('div');
       el.className = 'ooh-gas-customer-marker cursor-grab active:cursor-grabbing animate-marker-pop';
       el.innerHTML = `
-        <div style="position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
-          <div style="position: absolute; inset: 4px; border-radius: 9999px; background: ${
-            isOutOfZone ? 'rgba(220,38,38,0.12)' : 'rgba(37, 99, 235, 0.14)'
-          };"></div>
-          <div style="position: absolute; inset: 14px; border-radius: 9999px; background: ${
-            isOutOfZone ? 'rgba(220,38,38,0.24)' : 'rgba(37, 99, 235, 0.24)'
-          };"></div>
-          <div style="position: relative; background-color: ${dotColor}; border: 3.5px solid #ffffff; width: 22px; height: 22px; border-radius: 9999px; box-shadow: 0 3px 10px rgba(37,99,235,0.45);"></div>
+        <div style="position: relative; width: 96px; height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; user-select: none;">
+          <div style="position: absolute; top: 2px; background: ${badgeBg}; color: #ffffff; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 9.5px; font-weight: 800; padding: 2.5px 8px; border-radius: 9999px; white-space: nowrap; box-shadow: 0 3px 10px rgba(15,23,42,0.24); border: 1.5px solid #ffffff;">
+            ${badgeLabel}
+          </div>
+          <div style="position: relative; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; inset: 3px; border-radius: 9999px; background: ${haloColor};"></div>
+            <div style="position: relative; width: 22px; height: 22px; border-radius: 9999px; background: ${pinColor}; border: 3px solid #ffffff; box-shadow: 0 4px 12px rgba(15,23,42,0.34); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 6px; height: 6px; border-radius: 9999px; background: #22C55E;"></div>
+            </div>
+          </div>
         </div>
       `;
     }
@@ -1617,7 +1659,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         source: previewSourceId,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#0E8A45',
+          'line-color': '#10B981',
           'line-width': 4.5,
           'line-opacity': 0.96,
         },
@@ -2064,11 +2106,6 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     else leafletMapRef.current?.zoomOut();
   };
 
-  const handleResetNorth = () => {
-    if (engine === 'mapbox-gl') mapboxMapRef.current?.resetNorth();
-    else leafletMapRef.current?.setView([customerCoords.lat, customerCoords.lng], 15);
-  };
-
   // Search selection handler
   const handleSelectSearchResult = (result: GeocodedPlace) => {
     setSearchQuery(result.name);
@@ -2343,17 +2380,17 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       {/* Map Canvas Container */}
       <div ref={mapContainerRef} className="absolute inset-0 w-full h-full z-0" />
 
-      {/* Floating Circular Controls Bottom-Right (Current Location + Map Layers) matching Reference */}
+      {/* Floating Controls Bottom-Right (Zoom Pill, GPS Re-center & Map Layers) */}
       <div
-        className={`absolute right-3 z-20 flex flex-col items-end gap-2.5 pointer-events-auto ${
-          isHomeHero ? 'bottom-9 lg:bottom-5' : 'bottom-12'
+        className={`absolute right-3 z-20 flex flex-col items-end gap-2 pointer-events-auto ${
+          isHomeHero ? 'bottom-3 lg:bottom-4' : 'bottom-12'
         }`}
       >
         {/* Expandable Layers & Map Tools Popover */}
         {isLayersMenuOpen && (
-          <div className="bg-white rounded-2xl border border-neutral-200 shadow-2xl p-2.5 w-52 space-y-1.5 text-xs animate-in fade-in zoom-in-95">
+          <div className="bg-white/98 backdrop-blur-md rounded-2xl border border-neutral-200/90 shadow-2xl p-2.5 w-56 space-y-2 text-xs animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between px-1 pb-1 border-b border-neutral-100">
-              <span className="font-extrabold text-[#15191C]">Map Layers</span>
+              <span className="font-extrabold text-[#15191C]">Map Style</span>
               <button
                 type="button"
                 onClick={() => setIsLayersMenuOpen(false)}
@@ -2363,28 +2400,39 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-1">
+            <div className="grid grid-cols-3 gap-1">
               <button
                 type="button"
                 onClick={() => setMapStyle('streets')}
-                className={`py-1.5 px-2 rounded-xl font-bold cursor-pointer ${
+                className={`py-1.5 px-1.5 rounded-xl font-bold cursor-pointer text-[11px] ${
                   mapStyle === 'streets'
-                    ? 'bg-[#226946] text-white'
-                    : 'bg-[#F6F7F8] text-[#15191C]'
+                    ? 'bg-[#0E8A45] text-white'
+                    : 'bg-[#F6F7F8] text-[#15191C] hover:bg-neutral-200/70'
                 }`}
               >
-                Road Map
+                Roads
               </button>
               <button
                 type="button"
                 onClick={() => setMapStyle('light')}
-                className={`py-1.5 px-2 rounded-xl font-bold cursor-pointer ${
+                className={`py-1.5 px-1.5 rounded-xl font-bold cursor-pointer text-[11px] ${
                   mapStyle === 'light'
-                    ? 'bg-[#226946] text-white'
-                    : 'bg-[#F6F7F8] text-[#15191C]'
+                    ? 'bg-[#0E8A45] text-white'
+                    : 'bg-[#F6F7F8] text-[#15191C] hover:bg-neutral-200/70'
                 }`}
               >
                 Minimal
+              </button>
+              <button
+                type="button"
+                onClick={() => setMapStyle('satellite')}
+                className={`py-1.5 px-1.5 rounded-xl font-bold cursor-pointer text-[11px] ${
+                  mapStyle === 'satellite'
+                    ? 'bg-[#0E8A45] text-white'
+                    : 'bg-[#F6F7F8] text-[#15191C] hover:bg-neutral-200/70'
+                }`}
+              >
+                Satellite
               </button>
             </div>
 
@@ -2394,35 +2442,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
               className="w-full py-1.5 px-2.5 rounded-xl bg-[#F6F7F8] hover:bg-[#EDF6F1] text-[#15191C] font-semibold flex items-center justify-between cursor-pointer"
             >
               <span>Delivery Zones</span>
-              <span className="font-bold text-[#226946]">{showZonesOverlay ? 'ON' : 'OFF'}</span>
+              <span className="font-bold text-[#0E8A45]">{showZonesOverlay ? 'ON' : 'OFF'}</span>
             </button>
-
-            <div className="grid grid-cols-3 gap-1 pt-0.5">
-              <button
-                type="button"
-                onClick={handleZoomIn}
-                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={handleZoomOut}
-                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
-                title="Zoom Out"
-              >
-                <ZoomOut className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={handleResetNorth}
-                className="py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 flex items-center justify-center cursor-pointer"
-                title="Re-center Pin"
-              >
-                <Compass className="w-3.5 h-3.5" />
-              </button>
-            </div>
 
             <div className="flex items-center gap-1 pt-0.5 border-t border-neutral-100">
               <button
@@ -2431,7 +2452,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
                   setIsLayersMenuOpen(false);
                   setIsAdminModalOpen(true);
                 }}
-                className="flex-1 py-1.5 rounded-xl hover:bg-[#EDF6F1] text-[#226946] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                className="flex-1 py-1.5 rounded-xl hover:bg-[#EDF6F1] text-[#0E8A45] font-bold flex items-center justify-center gap-1 cursor-pointer"
               >
                 <Shield className="w-3 h-3" />
                 <span>Zones</span>
@@ -2451,19 +2472,41 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
           </div>
         )}
 
-        {/* Circular Current Location GPS Button */}
+        {/* Sleek Vertical Zoom +/- Control Pill */}
+        <div className="flex flex-col bg-white/95 backdrop-blur-md rounded-2xl shadow-lg border border-neutral-200/80 overflow-hidden">
+          <button
+            type="button"
+            onClick={handleZoomIn}
+            aria-label="Zoom in"
+            title="Zoom in"
+            className="w-9 h-9 flex items-center justify-center text-[#15191C] hover:bg-[#F6F7F8] active:bg-neutral-200 cursor-pointer border-b border-neutral-200/70"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={handleZoomOut}
+            aria-label="Zoom out"
+            title="Zoom out"
+            className="w-9 h-9 flex items-center justify-center text-[#15191C] hover:bg-[#F6F7F8] active:bg-neutral-200 cursor-pointer"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Circular Current Location GPS Re-center Button */}
         <button
           type="button"
           onClick={handleUseCurrentLocation}
           disabled={isLocatingUser}
           aria-label="Center on my current GPS location"
           title="Center on my current location"
-          className="w-11 h-11 rounded-full bg-white hover:bg-[#F6F7F8] active:scale-95 text-[#15191C] shadow-lg border border-neutral-200/70 flex items-center justify-center cursor-pointer transition-all"
+          className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/95 backdrop-blur-md hover:bg-[#F6F7F8] active:scale-95 text-[#15191C] shadow-lg border border-neutral-200/80 flex items-center justify-center cursor-pointer transition-all"
         >
           {isLocatingUser ? (
-            <Loader2 className="w-5 h-5 animate-spin text-[#226946]" />
+            <Loader2 className="w-4 h-4 animate-spin text-[#0E8A45]" />
           ) : (
-            <LocateFixed className="w-5 h-5 text-[#15191C]" />
+            <LocateFixed className="w-4 h-4 text-[#0E8A45]" />
           )}
         </button>
 
@@ -2471,15 +2514,15 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         <button
           type="button"
           onClick={() => setIsLayersMenuOpen((o) => !o)}
-          aria-label="Map layers and zoom controls"
+          aria-label="Map layers and style controls"
           title="Map layers"
-          className={`w-11 h-11 rounded-full shadow-lg border flex items-center justify-center cursor-pointer transition-all active:scale-95 ${
+          className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full shadow-lg border flex items-center justify-center cursor-pointer transition-all active:scale-95 ${
             isLayersMenuOpen
-              ? 'bg-[#226946] text-white border-[#226946]'
-              : 'bg-white hover:bg-[#F6F7F8] text-[#15191C] border-neutral-200/70'
+              ? 'bg-[#0E8A45] text-white border-[#0E8A45]'
+              : 'bg-white/95 backdrop-blur-md hover:bg-[#F6F7F8] text-[#15191C] border-neutral-200/80'
           }`}
         >
-          <Layers className="w-5 h-5" />
+          <Layers className="w-4 h-4" />
         </button>
       </div>
 
