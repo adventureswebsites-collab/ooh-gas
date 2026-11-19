@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
+import { AppIntroSplash } from './components/AppIntroSplash';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { MapboxDeliveryMap } from './components/map/MapboxDeliveryMap';
 import {
@@ -80,6 +81,12 @@ export default function App() {
   const [customerSession, setCustomerSession] = useState<CustomerAuthSession | null>(() =>
     getCurrentCustomerSession()
   );
+
+  // App Intro Splash (Animated Gas Bike on Road shown on initial app open)
+  const [showAppIntro, setShowAppIntro] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return !window.location.search.includes('skipIntro');
+  });
 
   // Welcome Screen (Screen 1) on fresh unauthenticated load
   const [showWelcomeScreen, setShowWelcomeScreen] = useState<boolean>(() => {
@@ -844,6 +851,15 @@ export default function App() {
     { label: '768px', width: 768, icon: Tablet, desc: 'Tablet' },
     { label: '1024px', width: 1024, icon: Monitor, desc: 'Desktop' },
   ];
+
+  // SCREEN 0: Animated App Intro (Gas Bike with Gas Cylinder Moving on Road)
+  if (showAppIntro) {
+    return (
+      <AppIntroSplash
+        onComplete={() => setShowAppIntro(false)}
+      />
+    );
+  }
 
   // SCREEN 1: Welcome Screen (when user hasn't entered yet)
   if (showWelcomeScreen && !customerSession && authPage === null) {
