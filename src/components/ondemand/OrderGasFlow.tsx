@@ -15,22 +15,15 @@ import {
   MOCK_SUPPLIERS,
 } from '../../data/mockData';
 import {
-  CustomerAuthSession,
   getCustomerSavedAddresses,
-  saveCustomerAddress,
+  CustomerAuthSession,
 } from '../../services/customerAuthService';
-import { CustomerAddress } from '../../types/multisupplier';
 import { SupplierLettermark } from '../BrandIdentities';
-import { MapboxDeliveryMap } from '../map/MapboxDeliveryMap';
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   CheckCircle2,
-  Clock,
-  Flame,
-  Heart,
-  Info,
   Loader2,
   Lock,
   MapPin,
@@ -39,15 +32,14 @@ import {
   ShieldCheck,
   Smartphone,
   Banknote,
-  Star,
   Calendar,
   Zap,
-  X,
   AlertTriangle,
 } from 'lucide-react';
-import { filterQualifiedSuppliers } from '../../services/supplierMatchingService';
+import { findNearestDeliveryDepots } from '../../services/supplierMatchingService';
 import img6kg from '../../assets/images/lpg_cylinder_6kg_1791888342390.jpg';
 import img13kg from '../../assets/images/lpg_cylinder_13kg_1791888361570.jpg';
+import img22_5kg from '../../assets/images/lpg_cylinder_22_5kg_1795082200575.jpg';
 import img29kg from '../../assets/images/lpg_cylinder_29kg_1791888380688.jpg';
 
 export type OrderFlowStep =
@@ -114,12 +106,20 @@ interface OrderGasFlowProps {
   onCancelFlow: () => void;
 }
 
-const CYLINDER_SIZES: CylinderSize[] = ['6kg', '13kg', '22.5kg', '29kg', '50kg'];
+const FEATURED_CYLINDER_SIZES: Array<{
+  size: CylinderSize;
+  subtitle: string;
+}> = [
+  { size: '6kg', subtitle: 'Compact' },
+  { size: '13kg', subtitle: 'Home' },
+  { size: '22.5kg', subtitle: 'Family+' },
+  { size: '29kg', subtitle: 'Commercial' },
+];
 
 const CYLINDER_IMAGES: Record<CylinderSize, string> = {
   '6kg': img6kg,
   '13kg': img13kg,
-  '22.5kg': img29kg,
+  '22.5kg': img22_5kg,
   '29kg': img29kg,
   '50kg': img29kg,
 };
@@ -150,7 +150,13 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   onTrackPlacedOrder,
   onCancelFlow,
 }) => {
-  const [step, setStep] = useState<OrderFlowStep>(initialStep);
+  const normalizeStep = (incoming: OrderFlowStep): OrderFlowStep => {
+    if (incoming === 'nearby_shops') return 'select_gas';
+    if (incoming === 'delivery_details') return 'order_summary';
+    return incoming;
+  };
+
+  const [step, setStep] = useState<OrderFlowStep>(() => normalizeStep(initialStep));
   const [timingType, setTimingType] = useState<DeliveryTimingType>(initialTiming);
 
   // Upcoming 7 dates for Scheduled delivery
@@ -186,11 +192,8 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier>(
     initialSupplier || suppliers[0] || MOCK_SUPPLIERS[0]
   );
-  const [infoShopModal, setInfoShopModal] = useState<Supplier | null>(null);
 
-  // Delivery Details Form
-  const [savedAddresses, setSavedAddresses] = useState<CustomerAddress[]>([]);
-  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  // Auto-filled customer contact & address from session + pinned location
   const [fullName, setFullName] = useState(customerSession?.user.fullName || 'Wangari Mwangi');
   const [phoneNumber, setPhoneNumber] = useState(customerSession?.user.phoneNumber || '0712 345 678');
   const [building, setBuilding] = useState(currentLocation.details || '');
@@ -198,9 +201,6 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   const [deliveryInstructions, setDeliveryInstructions] = useState(
     'Call at gate. Digital scale weight check required.'
   );
-  const [saveNewAddress, setSaveNewAddress] = useState(false);
-  const [addressLabel, setAddressLabel] = useState<'Home' | 'Work' | 'Other'>('Home');
-  const [isPinMapOpen, setIsPinMapOpen] = useState(false);
 
   // Payment
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('payhero_mpesa');
@@ -212,7 +212,7 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   const [confirmedWasScheduled, setConfirmedWasScheduled] = useState(false);
 
   useEffect(() => {
-    setStep(initialStep);
+    setStep(normalizeStep(initialStep));
   }, [initialStep]);
 
   useEffect(() => {
@@ -227,10 +227,8 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
       setPhoneNumber(customerSession.user.phoneNumber);
       getCustomerSavedAddresses()
         .then((addrs) => {
-          setSavedAddresses(addrs);
           const def = addrs.find((a) => a.isDefault) || addrs[0];
           if (def) {
-            setSelectedAddressId(def.id);
             if (def.buildingName) setBuilding(def.buildingName);
             if (def.houseOrFlatNumber) setUnitNumber(def.houseOrFlatNumber);
             if (def.deliveryNotes) setDeliveryInstructions(def.deliveryNotes);
@@ -240,36 +238,43 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
     }
   }, [customerSession]);
 
-  // Compute qualified shop list enforcing zone coverage, open status, stock availability, and brand preference
-  const supplierMatching = React.useMemo(() => {
-    return filterQualifiedSuppliers({
-      suppliers,
-      coverageResult,
+  // Compute nearby open depots serving the confirmed destination
+  const nearbyDepotSearch = React.useMemo(() => {
+    return findNearestDeliveryDepots({
       destination: currentLocation,
-      selectedSize,
-      purchaseType,
-      brandPreference,
+      coverageResult,
+      suppliers,
     });
-  }, [suppliers, coverageResult, currentLocation, selectedSize, purchaseType, brandPreference]);
+  }, [currentLocation, coverageResult, suppliers]);
 
-  const availableShops = supplierMatching.qualifiedSuppliers;
+  const eligibleSuppliers = nearbyDepotSearch.nearbyDepots;
 
   useEffect(() => {
-    if (availableShops.length > 0 && !availableShops.some((s) => s.id === selectedSupplier.id)) {
-      setSelectedSupplier(availableShops[0]);
+    if (
+      eligibleSuppliers.length > 0 &&
+      !eligibleSuppliers.some((s) => s.id === selectedSupplier.id)
+    ) {
+      setSelectedSupplier(eligibleSuppliers[0]);
     }
-  }, [availableShops, selectedSupplier.id]);
+  }, [eligibleSuppliers, selectedSupplier.id]);
 
-  const getShopPriceForSelection = (shop: Supplier) => {
-    const cyl = shop.cylinders.find((c) => c.size === selectedSize);
+  const getCylinderDetailsForShop = (shop: Supplier, size: CylinderSize) => {
+    const cyl = shop.cylinders.find((c) => c.size === size);
     if (cyl) {
-      return purchaseType === 'refill' ? cyl.refillPrice : cyl.completePrice;
+      return {
+        price: purchaseType === 'refill' ? cyl.refillPrice : cyl.completePrice,
+        inStock: cyl.inStock !== false,
+      };
     }
-    const bench = MARKET_BENCHMARK_PRICES[selectedSize];
-    return purchaseType === 'refill' ? bench.refillPrice : bench.completePrice;
+    const bench = MARKET_BENCHMARK_PRICES[size];
+    return {
+      price: purchaseType === 'refill' ? bench.refillPrice : bench.completePrice,
+      inStock: true,
+    };
   };
 
-  const unitPrice = getShopPriceForSelection(selectedSupplier);
+  const activeCylinderStatus = getCylinderDetailsForShop(selectedSupplier, selectedSize);
+  const unitPrice = activeCylinderStatus.price;
   const subtotal = unitPrice * quantity;
   const deliveryFee = selectedSupplier.deliveryFee ?? 0;
   const totalPrice = subtotal + deliveryFee;
@@ -277,19 +282,26 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   const selectedDateObj = upcomingDates.find((d) => d.dateKey === selectedDateKey) || upcomingDates[0];
   const scheduledSummary = `${selectedDateObj.label} (${selectedDateObj.dayNum} ${selectedDateObj.month}) · ${selectedSlotLabel}`;
 
-  const stepIndexMap: Record<OrderFlowStep, number> = {
-    select_gas: 1,
-    nearby_shops: 2,
-    delivery_details: 3,
-    order_summary: 4,
-    payment: 5,
-    confirmation: 6,
+  const handleSelectCylinderSize = (size: CylinderSize) => {
+    const currentShopCheck = getCylinderDetailsForShop(selectedSupplier, size);
+    if (currentShopCheck.inStock) {
+      onChangeSize(size);
+      return;
+    }
+    const stockedSupplier = eligibleSuppliers.find(
+      (s) => getCylinderDetailsForShop(s, size).inStock
+    );
+    if (stockedSupplier) {
+      setSelectedSupplier(stockedSupplier);
+      onChangeBrandPreference(stockedSupplier.brand);
+      onChangeSize(size);
+    }
   };
 
   const stepTitles: Record<OrderFlowStep, string> = {
-    select_gas: 'Select Your Gas',
-    nearby_shops: 'Nearby Gas Shops',
-    delivery_details: 'Delivery Details',
+    select_gas: '',
+    nearby_shops: '',
+    delivery_details: '',
     order_summary: 'Order Summary',
     payment: 'Payment Method',
     confirmation: 'Order Confirmed',
@@ -298,14 +310,12 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
   const handleBack = () => {
     if (step === 'select_gas' || step === 'confirmation') {
       onCancelFlow();
-    } else if (step === 'nearby_shops') {
-      setStep('select_gas');
-    } else if (step === 'delivery_details') {
-      setStep('nearby_shops');
     } else if (step === 'order_summary') {
-      setStep('delivery_details');
+      setStep('select_gas');
     } else if (step === 'payment') {
       setStep('order_summary');
+    } else {
+      setStep('select_gas');
     }
   };
 
@@ -319,21 +329,6 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
     setIsSubmitting(true);
 
     try {
-      if (saveNewAddress && building.trim()) {
-        await saveCustomerAddress({
-          label: addressLabel,
-          streetAddress: currentLocation.area || currentLocation.name,
-          buildingName: building.trim(),
-          houseOrFlatNumber: unitNumber.trim(),
-          deliveryNotes: deliveryInstructions.trim(),
-          location: {
-            lat: currentLocation.coordinates.lat,
-            lng: currentLocation.coordinates.lng,
-          },
-          isDefault: savedAddresses.length === 0,
-        }).catch(() => {});
-      }
-
       const result = await onSubmitConfirmedOrder({
         cylinderSize: selectedSize,
         purchaseType,
@@ -376,702 +371,302 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
 
   return (
     <div className="w-full max-w-4xl mx-auto pb-28 text-left animate-in fade-in duration-150">
-      {/* Top Progress Header */}
-      {step !== 'confirmation' && (
-        <div className="mb-4 space-y-2.5">
-          <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={handleBack}
-              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#15191C] hover:text-[#226946] cursor-pointer min-h-[40px]"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>{step === 'select_gas' ? 'Home' : 'Back'}</span>
-            </button>
+      {/* Minimal Header for Summary / Payment Steps (No "Order Gas" header or step counter) */}
+      {(step === 'order_summary' || step === 'payment') && (
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#15191C] hover:text-[#0E8A45] cursor-pointer min-h-[44px] pr-2"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back</span>
+          </button>
 
-            <h1 className="text-base sm:text-lg font-extrabold text-[#15191C] tracking-tight">
-              {stepTitles[step]}
-            </h1>
+          <h1 className="text-sm sm:text-base font-extrabold text-[#15191C] tracking-tight truncate">
+            {stepTitles[step]}
+          </h1>
 
-            <span className="text-xs font-bold text-[#226946] tabular-nums">
-              Step {stepIndexMap[step]}/5
-            </span>
-          </div>
-
-          <div className="w-full h-1.5 bg-[#F6F7F8] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-[#226946] rounded-full transition-all duration-300"
-              style={{ width: `${(stepIndexMap[step] / 5) * 100}%` }}
-            />
-          </div>
+          <div className="w-12" aria-hidden="true" />
         </div>
       )}
 
       {/* ======================================================== */}
-      {/* SCREEN 4: SELECT YOUR GAS                                */}
+      {/* SCREEN 4: CLEAN UBER-STYLE GAS SELECTION & CHECKOUT      */}
       {/* ======================================================== */}
       {step === 'select_gas' && (
-        <div className="space-y-4">
-          {/* Confirmed Delivery Destination Bar */}
-          <div className="bg-[#EDF6F1] border border-[#226946]/20 rounded-2xl px-4 py-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-[#226946] text-white flex items-center justify-center shrink-0">
-                <MapPin className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-extrabold uppercase tracking-wider text-[#226946]">
-                  Delivering To
-                </p>
-                <p className="text-xs sm:text-sm font-extrabold text-[#15191C] truncate">
-                  {currentLocation.name}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onChangeDestinationOnMap || onOpenLocationModal}
-              className="px-3 py-1.5 rounded-xl bg-white border border-neutral-200 text-xs font-bold text-[#226946] hover:bg-neutral-50 cursor-pointer shrink-0"
-            >
-              Change Pin
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-          <div className="lg:col-span-7 bg-white rounded-3xl border border-neutral-200/80 p-4 sm:p-6 space-y-5 shadow-2xs">
-            {/* Delivery Timing Toggle (Order Now vs Schedule) */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 p-1 bg-[#F6F7F8] rounded-2xl gap-1">
+        <div className="space-y-3">
+          {/* 1. Clean Delivery Location Header with Back + Pin + Change */}
+          <div className="bg-white rounded-2xl border border-neutral-200/80 shadow-xs p-3 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
                 <button
                   type="button"
-                  onClick={() => setTimingType('asap')}
-                  className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                    timingType === 'asap'
-                      ? 'bg-[#226946] text-white shadow-xs'
-                      : 'text-[#6B7280] hover:text-[#15191C]'
-                  }`}
+                  onClick={handleBack}
+                  aria-label="Back to map"
+                  className="w-9 h-9 rounded-full bg-[#F6F7F8] hover:bg-[#EDF6F1] text-[#15191C] flex items-center justify-center shrink-0 cursor-pointer transition-colors"
                 >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Order Now</span>
+                  <ArrowLeft className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setTimingType('scheduled')}
-                  className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                    timingType === 'scheduled'
-                      ? 'bg-[#226946] text-white shadow-xs'
-                      : 'text-[#6B7280] hover:text-[#15191C]'
-                  }`}
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>Schedule</span>
-                </button>
-              </div>
-
-              {timingType === 'scheduled' && (
-                <div className="p-3.5 rounded-2xl bg-[#F8FAF9] border border-neutral-200/80 space-y-3 animate-in fade-in">
-                  <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-                    {upcomingDates.map((d) => (
-                      <button
-                        key={d.dateKey}
-                        type="button"
-                        onClick={() => setSelectedDateKey(d.dateKey)}
-                        className={`px-3 py-2 rounded-xl border text-center min-w-[72px] shrink-0 cursor-pointer transition-all ${
-                          selectedDateKey === d.dateKey
-                            ? 'bg-[#226946] border-[#226946] text-white'
-                            : 'bg-white border-neutral-200 text-[#15191C]'
-                        }`}
-                      >
-                        <span className="text-[10px] font-semibold block opacity-80">{d.label}</span>
-                        <span className="text-sm font-extrabold tabular-nums">
-                          {d.dayNum} {d.month}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {AVAILABLE_DELIVERY_TIME_SLOTS.slice(0, 4).map((slot) => (
-                      <button
-                        key={slot.id}
-                        type="button"
-                        onClick={() => setSelectedSlotLabel(slot.label)}
-                        className={`px-3 py-2 rounded-xl border text-left text-xs font-semibold cursor-pointer flex items-center justify-between ${
-                          selectedSlotLabel === slot.label
-                            ? 'bg-[#EDF6F1] border-[#226946] text-[#226946]'
-                            : 'bg-white border-neutral-200 text-[#15191C]'
-                        }`}
-                      >
-                        <span>{slot.label}</span>
-                        {selectedSlotLabel === slot.label && <Check className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
-                  </div>
+                <div className="w-9 h-9 rounded-full bg-[#EDF6F1] text-[#0E8A45] flex items-center justify-center shrink-0">
+                  <MapPin className="w-4 h-4" />
                 </div>
-              )}
-            </div>
-
-            {/* Refill vs Exchange / New Complete Set */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-[#6B7280] uppercase tracking-wider">
-                1. Order Type
-              </label>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => onChangePurchaseType('refill')}
-                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                    purchaseType === 'refill'
-                      ? 'border-[#226946] bg-[#EDF6F1] ring-1 ring-[#226946]'
-                      : 'border-neutral-200 bg-white hover:bg-[#F6F7F8]'
-                  }`}
-                >
-                  <span className="text-sm font-extrabold text-[#15191C] block">Refill Gas</span>
-                  <span className="text-[11px] text-[#6B7280]">Swap your empty cylinder</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onChangePurchaseType('complete')}
-                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                    purchaseType === 'complete'
-                      ? 'border-[#226946] bg-[#EDF6F1] ring-1 ring-[#226946]'
-                      : 'border-neutral-200 bg-white hover:bg-[#F6F7F8]'
-                  }`}
-                >
-                  <span className="text-sm font-extrabold text-[#15191C] block">
-                    Exchange / Complete
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] font-semibold text-[#6B7280] block leading-tight">
+                    Deliver to
                   </span>
-                  <span className="text-[11px] text-[#6B7280]">Full cylinder + tamper seal</span>
-                </button>
+                  <p className="text-sm font-extrabold text-[#15191C] truncate">
+                    {currentLocation.name}
+                  </p>
+                </div>
               </div>
-            </div>
-
-            {/* Cylinder Sizes: 6kg, 13kg, 22.5kg, 29kg, 50kg */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-[#6B7280] uppercase tracking-wider">
-                2. Cylinder Size
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                {CYLINDER_SIZES.map((sz) => {
-                  const info = MARKET_BENCHMARK_PRICES[sz];
-                  const price = purchaseType === 'refill' ? info.refillPrice : info.completePrice;
-                  const active = selectedSize === sz;
-                  return (
-                    <button
-                      key={sz}
-                      type="button"
-                      onClick={() => onChangeSize(sz)}
-                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
-                        active
-                          ? 'border-[#226946] bg-[#EDF6F1] ring-1 ring-[#226946]'
-                          : 'border-neutral-200 bg-white hover:border-neutral-300'
-                      }`}
-                    >
-                      <img
-                        src={CYLINDER_IMAGES[sz]}
-                        alt={sz}
-                        className="w-10 h-10 object-contain rounded-lg bg-[#F6F7F8] p-1 shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="min-w-0">
-                        <span className="text-sm font-extrabold text-[#15191C] block">{sz}</span>
-                        <span className="text-xs font-bold text-[#226946] tabular-nums block">
-                          KSh {price.toLocaleString()}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* LPG Brand Preference */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-[#6B7280] uppercase tracking-wider">
-                3. Gas Brand
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {(
-                  [
-                    { id: 'Any', label: 'Any Brand' },
-                    { id: 'K-Gas', label: 'K-Gas' },
-                    { id: 'TotalEnergies', label: 'TotalEnergies' },
-                    { id: 'Shell Gas', label: 'Shell Gas' },
-                  ] as Array<{ id: GasBrand; label: string }>
-                ).map((b) => (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onClick={() => onChangeBrandPreference(b.id)}
-                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                      brandPreference === b.id
-                        ? 'bg-[#226946] border-[#226946] text-white'
-                        : 'bg-[#F6F7F8] border-transparent text-[#15191C] hover:bg-neutral-200/70'
-                    }`}
-                  >
-                    {b.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Quantity Stepper */}
-            <div className="p-3.5 rounded-2xl bg-[#F6F7F8] flex items-center justify-between">
-              <div>
-                <span className="text-sm font-bold text-[#15191C] block">Quantity</span>
-                <span className="text-xs text-[#6B7280]">
-                  {MARKET_BENCHMARK_PRICES[selectedSize].approxWeight}
-                </span>
-              </div>
-              <div className="inline-flex items-center gap-3 bg-white px-3 py-1.5 rounded-full border border-neutral-200">
-                <button
-                  type="button"
-                  onClick={() => onChangeQuantity(Math.max(1, quantity - 1))}
-                  disabled={quantity <= 1}
-                  className="w-7 h-7 rounded-full bg-[#F6F7F8] text-[#15191C] flex items-center justify-center disabled:opacity-35 cursor-pointer"
-                  aria-label="Decrease quantity"
-                >
-                  <Minus className="w-3.5 h-3.5" />
-                </button>
-                <span className="text-sm font-extrabold text-[#15191C] w-5 text-center tabular-nums">
-                  {quantity}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onChangeQuantity(Math.min(5, quantity + 1))}
-                  disabled={quantity >= 5}
-                  className="w-7 h-7 rounded-full bg-[#226946] text-white flex items-center justify-center disabled:opacity-35 cursor-pointer"
-                  aria-label="Increase quantity"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Summary Card */}
-          <div className="lg:col-span-5 bg-white rounded-3xl border border-neutral-200/80 p-5 space-y-4 shadow-2xs lg:sticky lg:top-20">
-            <div className="flex items-center gap-3">
-              <div className="w-16 h-16 rounded-2xl bg-[#F6F7F8] p-2 flex items-center justify-center shrink-0">
-                <img
-                  src={CYLINDER_IMAGES[selectedSize]}
-                  alt={selectedSize}
-                  className="w-full h-full object-contain"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-[#226946] uppercase tracking-wider">
-                  {brandPreference === 'Any' ? 'Any Verified Shop' : brandPreference}
-                </p>
-                <h3 className="text-lg font-extrabold text-[#15191C]">
-                  {quantity}x {selectedSize} {purchaseType === 'refill' ? 'Refill' : 'Complete Set'}
-                </h3>
-                <p className="text-xs text-[#6B7280]">
-                  {timingType === 'scheduled' ? scheduledSummary : 'ASAP Express Delivery'}
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-neutral-100 flex items-center justify-between text-sm">
-              <span className="text-[#6B7280]">Estimated Product Price</span>
-              <span className="text-lg font-extrabold text-[#15191C] tabular-nums">
-                KSh{' '}
-                {(
-                  (purchaseType === 'refill'
-                    ? MARKET_BENCHMARK_PRICES[selectedSize].refillPrice
-                    : MARKET_BENCHMARK_PRICES[selectedSize].completePrice) * quantity
-                ).toLocaleString()}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setStep('nearby_shops')}
-              className="w-full min-h-[50px] py-3.5 px-5 rounded-2xl bg-[#226946] hover:bg-[#195136] text-white font-bold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-xs"
-            >
-              <span>Find Gas Suppliers</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* SCREEN 5: QUALIFIED GAS SUPPLIERS SERVING DESTINATION     */}
-      {/* ======================================================== */}
-      {step === 'nearby_shops' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-          <div className="lg:col-span-5 lg:sticky lg:top-20 space-y-2.5">
-            <MapboxDeliveryMap
-              currentLocation={currentLocation}
-              suppliers={availableShops}
-              activeOrder={null}
-              coverageResult={coverageResult}
-              onSelectLocation={onSelectLocation}
-              heightClassName="h-[220px] sm:h-[280px] lg:h-[400px]"
-              hideSearchOverlay={true}
-            />
-            <div className="px-1 flex items-center justify-between gap-2 text-xs text-[#6B7280]">
-              <span className="truncate">
-                {supplierMatching.isCovered ? (
-                  <>
-                    <strong className="text-[#15191C]">{availableShops.length}</strong> serving{' '}
-                    <strong className="text-[#15191C]">{currentLocation.name.split(',')[0]}</strong> ·{' '}
-                    {selectedSize}
-                  </>
-                ) : (
-                  <span className="text-rose-600 font-semibold">Outside active delivery zone</span>
-                )}
-              </span>
               <button
                 type="button"
                 onClick={onChangeDestinationOnMap || onOpenLocationModal}
-                className="font-bold text-[#226946] hover:underline cursor-pointer shrink-0"
+                className="min-h-[40px] px-3 py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-[#EDF6F1] text-xs font-extrabold text-[#0E8A45] transition-colors cursor-pointer shrink-0 whitespace-nowrap"
               >
-                Adjust Pin
+                Change
+              </button>
+            </div>
+
+            {/* Compact Deliver Now vs Schedule Selector */}
+            <div className="flex items-center gap-1.5 bg-[#F6F7F8] p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setTimingType('asap')}
+                className={`flex-1 min-h-[36px] px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                  timingType === 'asap'
+                    ? 'bg-white text-[#15191C] shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-[#0E8A45]" />
+                <span>Deliver now · 15–25 min</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimingType('scheduled')}
+                className={`flex-1 min-h-[36px] px-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                  timingType === 'scheduled'
+                    ? 'bg-white text-[#15191C] shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5 text-[#0E8A45]" />
+                <span>Schedule</span>
+              </button>
+            </div>
+
+            {timingType === 'scheduled' && (
+              <div className="pt-1 space-y-2 animate-in fade-in duration-150">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+                  {upcomingDates.map((d) => (
+                    <button
+                      key={d.dateKey}
+                      type="button"
+                      onClick={() => setSelectedDateKey(d.dateKey)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-center min-w-[64px] shrink-0 cursor-pointer transition-all ${
+                        selectedDateKey === d.dateKey
+                          ? 'bg-[#0E8A45] border-[#0E8A45] text-white'
+                          : 'bg-white border-neutral-200 text-[#15191C]'
+                      }`}
+                    >
+                      <span className="text-[10px] font-semibold block opacity-85">{d.label}</span>
+                      <span className="text-xs font-extrabold tabular-nums">
+                        {d.dayNum} {d.month}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {AVAILABLE_DELIVERY_TIME_SLOTS.slice(0, 4).map((slot) => (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      onClick={() => setSelectedSlotLabel(slot.label)}
+                      className={`px-2.5 py-1.5 rounded-xl border text-left text-[11px] font-bold cursor-pointer flex items-center justify-between ${
+                        selectedSlotLabel === slot.label
+                          ? 'bg-[#EDF6F1] border-[#0E8A45] text-[#0E8A45]'
+                          : 'bg-white border-neutral-200 text-[#15191C]'
+                      }`}
+                    >
+                      <span className="truncate">{slot.label}</span>
+                      {selectedSlotLabel === slot.label && <Check className="w-3 h-3 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Out-of-zone warning if needed */}
+          {coverageResult && !coverageResult.isCovered && (
+            <div className="rounded-2xl bg-rose-50 border border-rose-200 px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs text-rose-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span className="font-semibold truncate">{coverageResult.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={onChangeDestinationOnMap || onOpenLocationModal}
+                className="px-3 py-1.5 rounded-xl bg-rose-600 text-white font-bold shrink-0 cursor-pointer"
+              >
+                Move Pin
+              </button>
+            </div>
+          )}
+
+          {/* Refill / New Gas Toggle + Clean Quantity Selector */}
+          <div className="bg-white rounded-2xl border border-neutral-200/80 shadow-xs p-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div
+              role="tablist"
+              aria-label="Gas order type"
+              className="inline-flex items-center bg-[#F6F7F8] p-1 rounded-xl"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={purchaseType === 'refill'}
+                onClick={() => onChangePurchaseType('refill')}
+                className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer whitespace-nowrap ${
+                  purchaseType === 'refill'
+                    ? 'bg-[#0E8A45] text-white shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                Refill
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={purchaseType === 'complete'}
+                onClick={() => onChangePurchaseType('complete')}
+                className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer whitespace-nowrap ${
+                  purchaseType === 'complete'
+                    ? 'bg-[#0E8A45] text-white shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                New Gas
+              </button>
+            </div>
+
+            {/* Clean Quantity Stepper */}
+            <div className="inline-flex items-center gap-2 bg-[#F6F7F8] px-1.5 py-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => onChangeQuantity(Math.max(1, quantity - 1))}
+                disabled={quantity <= 1}
+                aria-label="Decrease quantity"
+                className="w-9 h-9 rounded-lg bg-white border border-neutral-200/80 text-[#15191C] flex items-center justify-center disabled:opacity-40 cursor-pointer active:scale-95 transition-transform"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <span className="w-6 text-center text-sm font-extrabold text-[#15191C] tabular-nums">
+                {quantity}
+              </span>
+              <button
+                type="button"
+                onClick={() => onChangeQuantity(Math.min(5, quantity + 1))}
+                disabled={quantity >= 5}
+                aria-label="Increase quantity"
+                className="w-9 h-9 rounded-lg bg-[#0E8A45] text-white flex items-center justify-center disabled:opacity-40 cursor-pointer active:scale-95 transition-transform"
+              >
+                <Plus className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
 
-          <div className="lg:col-span-7 space-y-3">
-            {/* Verified Zone + Stock Matching Summary */}
-            <div
-              className={`rounded-2xl px-3.5 py-2.5 border text-xs font-semibold flex items-center gap-2 ${
-                supplierMatching.isCovered && availableShops.length > 0
-                  ? 'bg-[#EDF6F1] border-[#226946]/20 text-[#195136]'
-                  : 'bg-rose-50 border-rose-200 text-rose-800'
-              }`}
-            >
-              {supplierMatching.isCovered && availableShops.length > 0 ? (
-                <CheckCircle2 className="w-4 h-4 text-[#226946] shrink-0" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-              )}
-              <span>{supplierMatching.message}</span>
+          {/* Cylinder Sizes (6kg, 13kg, 22.5kg, 29kg) with Product Images & Prices */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-0.5">
+              <h2 className="text-sm font-extrabold text-[#15191C]">Select cylinder size</h2>
+              <span className="text-xs font-medium text-[#6B7280]">
+                {purchaseType === 'refill' ? 'Swap empty cylinder' : 'Full cylinder included'}
+              </span>
             </div>
 
-            {availableShops.length === 0 ? (
-              <div className="rounded-3xl border border-neutral-200 bg-white p-6 text-center space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
-                  <AlertTriangle className="w-6 h-6" />
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-base font-extrabold text-[#15191C]">
-                    {supplierMatching.emptyReason === 'out_of_zone'
-                      ? 'Delivery Location Outside Service Zone'
-                      : `No Stock for ${selectedSize} at This Location`}
-                  </h3>
-                  <p className="text-xs text-[#6B7280] max-w-md mx-auto leading-relaxed">
-                    {supplierMatching.message}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={onChangeDestinationOnMap || onOpenLocationModal}
-                    className="px-4 py-2.5 rounded-xl bg-[#226946] hover:bg-[#195136] text-white text-xs font-bold cursor-pointer"
-                  >
-                    Move Delivery Pin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStep('select_gas')}
-                    className="px-4 py-2.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 text-[#15191C] text-xs font-bold cursor-pointer"
-                  >
-                    Change Cylinder Size
-                  </button>
-                </div>
-              </div>
-            ) : (
-            availableShops.map((shop) => {
-              const isSelected = selectedSupplier.id === shop.id;
-              const isFav = favoriteSupplierIds.includes(shop.id);
-              const shopUnitPrice = getShopPriceForSelection(shop);
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {FEATURED_CYLINDER_SIZES.map(({ size, subtitle }) => {
+                const { price, inStock } = getCylinderDetailsForShop(selectedSupplier, size);
+                const isSelected = selectedSize === size;
+                const anySupplierStocks = eligibleSuppliers.some(
+                  (s) => getCylinderDetailsForShop(s, size).inStock
+                );
 
-              return (
-                <div
-                  key={shop.id}
-                  onClick={() => setSelectedSupplier(shop)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSelectedSupplier(shop);
-                    }
-                  }}
-                  className={`rounded-2xl border p-4 transition-all cursor-pointer bg-white flex flex-col gap-3 ${
-                    isSelected
-                      ? 'border-[#226946] ring-2 ring-[#226946]/25 bg-[#EDF6F1]/30'
-                      : 'border-neutral-200 hover:border-neutral-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3 min-w-0">
-                      <SupplierLettermark brand={shop.brand} className="w-11 h-11 shrink-0" />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-sm sm:text-base font-extrabold text-[#15191C] truncate">
-                            {shop.name}
-                          </h3>
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              shop.isOpen
-                                ? 'bg-[#EDF6F1] text-[#226946]'
-                                : 'bg-rose-50 text-rose-700'
-                            }`}
-                          >
-                            {shop.isOpen ? 'Open' : 'Closed'}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center flex-wrap gap-x-2 text-xs text-[#6B7280]">
-                          <span className="inline-flex items-center gap-0.5 font-bold text-[#15191C]">
-                            <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                            {shop.rating.toFixed(1)}
-                          </span>
-                          <span>·</span>
-                          <span className="tabular-nums">{shop.distanceKm} km away</span>
-                          <span>·</span>
-                          <span className="font-semibold text-[#226946] flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {shop.deliveryTimeMin}
-                          </span>
-                        </div>
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    disabled={eligibleSuppliers.length > 0 && !anySupplierStocks}
+                    onClick={() => handleSelectCylinderSize(size)}
+                    className={`relative rounded-2xl border p-2.5 text-left transition-all cursor-pointer flex flex-col justify-between bg-white disabled:opacity-45 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? 'border-[#0E8A45] bg-[#F5FBF7] ring-1 ring-[#0E8A45]/35 shadow-sm'
+                        : 'border-neutral-200/90 hover:border-[#0E8A45]/45 shadow-2xs'
+                    }`}
+                  >
+                    {isSelected && (
+                      <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[#0E8A45] text-white flex items-center justify-center z-10 shadow-xs">
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </span>
+                    )}
+
+                    <div className="w-full h-24 sm:h-28 rounded-xl bg-[#F6F7F8] overflow-hidden flex items-center justify-center p-1.5 mb-2">
+                      <img
+                        src={CYLINDER_IMAGES[size]}
+                        alt={`${size} LPG cooking gas cylinder`}
+                        className="w-full h-full object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-baseline justify-between gap-1">
+                        <span className="text-sm font-extrabold text-[#15191C]">{size}</span>
+                        <span className="text-[11px] font-medium text-[#6B7280] truncate">
+                          {subtitle}
+                        </span>
                       </div>
-                    </div>
-
-                    <div className="text-right shrink-0">
-                      <span className="text-base font-extrabold text-[#15191C] tabular-nums block">
-                        KSh {shopUnitPrice.toLocaleString()}
-                      </span>
-                      <span className="text-[11px] font-semibold text-[#226946]">
-                        {shop.deliveryFee === 0 ? 'Free delivery' : `+KSh ${shop.deliveryFee} delivery`}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="pt-2.5 border-t border-neutral-100 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleFavoriteSupplier(shop.id);
-                        }}
-                        className="p-2 rounded-xl bg-[#F6F7F8] hover:bg-[#EDF6F1] text-[#6B7280] cursor-pointer"
-                        aria-label="Toggle favourite gas shop"
+                      <p
+                        className={`text-xs sm:text-sm font-extrabold tabular-nums mt-0.5 ${
+                          inStock ? 'text-[#0E8A45]' : 'text-amber-700'
+                        }`}
                       >
-                        <Heart
-                          className={`w-4 h-4 ${isFav ? 'fill-rose-500 text-rose-500' : ''}`}
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setInfoShopModal(shop);
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-[#F6F7F8] hover:bg-neutral-200 text-xs font-bold text-[#15191C] inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        <Info className="w-3.5 h-3.5 text-[#226946]" />
-                        <span>Shop Details</span>
-                      </button>
+                        {inStock ? `KSh ${price.toLocaleString()}` : 'Available nearby'}
+                      </p>
                     </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedSupplier(shop);
-                        setStep('delivery_details');
-                      }}
-                      className="px-4 py-2 rounded-xl bg-[#226946] hover:bg-[#195136] text-white text-xs font-bold cursor-pointer transition-colors"
-                    >
-                      Select Shop →
-                    </button>
-                  </div>
+          {/* Prominent Green Sticky Checkout Bar -> Direct to Order Summary */}
+          <div className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-neutral-200/90 shadow-[0_-8px_24px_rgba(15,23,42,0.08)]">
+            <div className="max-w-4xl mx-auto px-3 sm:px-6 py-2.5">
+              <button
+                type="button"
+                disabled={eligibleSuppliers.length === 0 || !activeCylinderStatus.inStock}
+                onClick={() => setStep('order_summary')}
+                className="w-full min-h-[50px] px-4 rounded-2xl bg-[#0E8A45] hover:bg-[#0B7138] active:scale-[0.99] disabled:bg-neutral-300 disabled:cursor-not-allowed text-white font-extrabold transition-all cursor-pointer flex items-center justify-between gap-3 shadow-md shadow-[#0E8A45]/20"
+              >
+                <div className="min-w-0 text-left">
+                  <span className="text-xs sm:text-sm block truncate">
+                    {eligibleSuppliers.length === 0
+                      ? 'Move pin inside a delivery zone'
+                      : `${quantity}× ${selectedSize} ${
+                          purchaseType === 'refill' ? 'Refill' : 'New Gas'
+                        } · ${selectedSupplier.name}`}
+                  </span>
                 </div>
-              );
-            }))}
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* SCREEN 6: DELIVERY DETAILS                               */}
-      {/* ======================================================== */}
-      {step === 'delivery_details' && (
-        <div className="max-w-2xl mx-auto bg-white rounded-3xl border border-neutral-200/80 p-5 sm:p-6 space-y-5 shadow-2xs">
-          {/* Pinned Location + Interactive Pin Trigger */}
-          <div className="p-4 rounded-2xl bg-[#EDF6F1] border border-[#226946]/20 flex items-center justify-between gap-3">
-            <div className="flex items-start gap-2.5 min-w-0">
-              <MapPin className="w-5 h-5 text-[#226946] shrink-0 mt-0.5" />
-              <div className="min-w-0">
-                <p className="text-xs font-bold uppercase tracking-wider text-[#226946]">
-                  Pinned Delivery Location
-                </p>
-                <p className="text-sm font-extrabold text-[#15191C] truncate">
-                  {currentLocation.name}
-                </p>
-                <p className="text-xs text-[#6B7280] truncate">{currentLocation.area}</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsPinMapOpen(!isPinMapOpen)}
-              className="px-3 py-2 rounded-xl bg-white hover:bg-neutral-50 text-[#226946] text-xs font-bold border border-[#226946]/20 cursor-pointer shrink-0"
-            >
-              {isPinMapOpen ? 'Hide Map' : 'Move Pin'}
-            </button>
-          </div>
-
-          {isPinMapOpen && (
-            <div className="space-y-2 animate-in fade-in">
-              <MapboxDeliveryMap
-                currentLocation={currentLocation}
-                suppliers={[selectedSupplier]}
-                coverageResult={coverageResult}
-                onSelectLocation={onSelectLocation}
-                heightClassName="h-[220px]"
-              />
-              <p className="text-[11px] text-[#6B7280]">
-                Drag the green pin or use GPS to set your exact gate coordinates.
-              </p>
-            </div>
-          )}
-
-          {/* Saved Delivery Addresses Quick Selectors */}
-          {savedAddresses.length > 0 && (
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-[#6B7280] uppercase tracking-wider">
-                Saved Delivery Addresses
-              </label>
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-                {savedAddresses.map((addr) => {
-                  const active = selectedAddressId === addr.id;
-                  return (
-                    <button
-                      key={addr.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedAddressId(addr.id);
-                        if (addr.buildingName) setBuilding(addr.buildingName);
-                        if (addr.houseOrFlatNumber) setUnitNumber(addr.houseOrFlatNumber);
-                        if (addr.deliveryNotes) setDeliveryInstructions(addr.deliveryNotes);
-                      }}
-                      className={`px-3.5 py-2 rounded-xl border text-xs font-bold whitespace-nowrap cursor-pointer transition-colors ${
-                        active
-                          ? 'bg-[#226946] border-[#226946] text-white'
-                          : 'bg-[#F6F7F8] border-transparent text-[#15191C] hover:bg-neutral-200'
-                      }`}
-                    >
-                      {addr.label} · {addr.buildingName || addr.streetAddress}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Customer Contact & Address Fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
-            <div>
-              <label className="block font-bold text-[#15191C] mb-1">Recipient Name</label>
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Your full name"
-                className="w-full px-3.5 py-3 rounded-xl bg-[#F6F7F8] text-sm text-[#15191C] font-medium outline-hidden focus:ring-2 focus:ring-[#226946] focus:bg-white"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#15191C] mb-1">Phone Number</label>
-              <input
-                type="tel"
-                required
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                placeholder="0712 345 678"
-                className="w-full px-3.5 py-3 rounded-xl bg-[#F6F7F8] text-sm text-[#15191C] font-medium outline-hidden focus:ring-2 focus:ring-[#226946] focus:bg-white"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#15191C] mb-1">Building / Apartment / Court</label>
-              <input
-                type="text"
-                value={building}
-                onChange={(e) => setBuilding(e.target.value)}
-                placeholder="e.g. Silver Oak Court"
-                className="w-full px-3.5 py-3 rounded-xl bg-[#F6F7F8] text-sm text-[#15191C] font-medium outline-hidden focus:ring-2 focus:ring-[#226946] focus:bg-white"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-[#15191C] mb-1">House / Floor / Gate #</label>
-              <input
-                type="text"
-                value={unitNumber}
-                onChange={(e) => setUnitNumber(e.target.value)}
-                placeholder="e.g. Apt 4B, 2nd Floor"
-                className="w-full px-3.5 py-3 rounded-xl bg-[#F6F7F8] text-sm text-[#15191C] font-medium outline-hidden focus:ring-2 focus:ring-[#226946] focus:bg-white"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-[#15191C] mb-1">
-              Delivery Instructions
-            </label>
-            <textarea
-              rows={2}
-              value={deliveryInstructions}
-              onChange={(e) => setDeliveryInstructions(e.target.value)}
-              placeholder="Optional gate instructions or landmarks..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F6F7F8] text-sm text-[#15191C] font-medium outline-hidden focus:ring-2 focus:ring-[#226946] focus:bg-white"
-            />
-          </div>
-
-          {customerSession && (
-            <div className="p-3 rounded-2xl bg-[#F6F7F8] flex flex-wrap items-center justify-between gap-2 text-xs">
-              <label className="flex items-center gap-2 font-semibold text-[#15191C] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={saveNewAddress}
-                  onChange={(e) => setSaveNewAddress(e.target.checked)}
-                  className="w-4 h-4 accent-[#226946] rounded cursor-pointer"
-                />
-                <span>Save this location to my profile</span>
-              </label>
-
-              {saveNewAddress && (
-                <div className="flex items-center gap-1">
-                  {(['Home', 'Work', 'Other'] as const).map((lbl) => (
-                    <button
-                      key={lbl}
-                      type="button"
-                      onClick={() => setAddressLabel(lbl)}
-                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] cursor-pointer ${
-                        addressLabel === lbl
-                          ? 'bg-[#226946] text-white'
-                          : 'bg-white text-[#6B7280]'
-                      }`}
-                    >
-                      {lbl}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-1.5 shrink-0 tabular-nums text-sm sm:text-base">
+                  <span>KSh {totalPrice.toLocaleString()}</span>
+                  <ArrowRight className="w-4 h-4" />
                 </div>
-              )}
+              </button>
             </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setStep('order_summary')}
-            className="w-full min-h-[50px] py-3.5 px-5 rounded-2xl bg-[#226946] hover:bg-[#195136] text-white font-bold text-sm transition-colors cursor-pointer"
-          >
-            Continue to Order Summary
-          </button>
+          </div>
         </div>
       )}
 
@@ -1113,13 +708,6 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setStep('nearby_shops')}
-              className="text-xs font-bold text-[#226946] hover:underline cursor-pointer shrink-0"
-            >
-              Change
-            </button>
           </div>
 
           {/* Selected Cylinder + Delivery Destination */}
@@ -1421,80 +1009,6 @@ export const OrderGasFlow: React.FC<OrderGasFlowProps> = ({
         </div>
       )}
 
-      {/* Shop Detail Info Bottom Sheet Modal (Reference Row 1 Col 5) */}
-      {infoShopModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/45 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4"
-          onClick={() => setInfoShopModal(null)}
-          role="presentation"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 space-y-4 shadow-2xl text-left animate-in slide-in-from-bottom-4 duration-150"
-            role="dialog"
-            aria-modal="true"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-extrabold text-[#15191C]">Gas Shop Information</h3>
-              <button
-                type="button"
-                onClick={() => setInfoShopModal(null)}
-                className="w-8 h-8 rounded-full hover:bg-[#F6F7F8] flex items-center justify-center cursor-pointer"
-                aria-label="Close shop details"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-[#F6F7F8]">
-              <SupplierLettermark brand={infoShopModal.brand} className="w-12 h-12 shrink-0" />
-              <div>
-                <h4 className="text-base font-extrabold text-[#15191C]">{infoShopModal.name}</h4>
-                <p className="text-xs text-[#6B7280]">{infoShopModal.locationArea}</p>
-                <p className="text-xs font-bold text-[#226946] mt-0.5">
-                  ★ {infoShopModal.rating.toFixed(1)} ({infoShopModal.reviewCount} verified reviews)
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2 text-xs sm:text-sm divide-y divide-neutral-100">
-              <div className="flex justify-between py-2">
-                <span className="text-[#6B7280]">{selectedSize} Price</span>
-                <span className="font-extrabold text-[#15191C] tabular-nums">
-                  KSh {getShopPriceForSelection(infoShopModal).toLocaleString()}
-                </span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-[#6B7280]">Estimated Delivery Time</span>
-                <span className="font-bold text-[#226946]">{infoShopModal.deliveryTimeMin}</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-[#6B7280]">Hours Today</span>
-                <span className="font-semibold text-[#15191C]">Closes {infoShopModal.closingTime}</span>
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-[#EDF6F1] text-xs text-[#195136] flex items-start gap-2">
-              <Flame className="w-4 h-4 text-[#226946] shrink-0 mt-0.5" />
-              <span>
-                EPRA-licensed gas depot. Every dispatch includes a certified digital hanging scale check and tamper-seal verification at your doorstep.
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedSupplier(infoShopModal);
-                setInfoShopModal(null);
-                setStep('delivery_details');
-              }}
-              className="w-full min-h-[48px] py-3 rounded-2xl bg-[#226946] hover:bg-[#195136] text-white font-bold text-sm cursor-pointer"
-            >
-              Confirm Gas Shop
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

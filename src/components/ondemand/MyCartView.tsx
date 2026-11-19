@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import img6kg from '../../assets/images/lpg_cylinder_6kg_1791888342390.jpg';
 import img13kg from '../../assets/images/lpg_cylinder_13kg_1791888361570.jpg';
+import img22_5kg from '../../assets/images/lpg_cylinder_22_5kg_1795082200575.jpg';
 import img29kg from '../../assets/images/lpg_cylinder_29kg_1791888380688.jpg';
 
 interface MyCartViewProps {
@@ -101,7 +102,7 @@ export const MyCartView: React.FC<MyCartViewProps> = ({
   const images: Record<string, string> = {
     '6kg': img6kg,
     '13kg': img13kg,
-    '22.5kg': img29kg,
+    '22.5kg': img22_5kg,
     '29kg': img29kg,
     '50kg': img29kg,
   };

@@ -1110,20 +1110,32 @@ export default function App() {
                   suppliers={MOCK_SUPPLIERS}
                   riders={MOCK_RIDERS}
                   zones={deliveryZones}
+                  initialSize={selectedSize}
+                  initialBrandPreference={brandPreference}
+                  initialQuantity={quantity}
+                  initialPurchaseType={purchaseType}
                   onZonesUpdated={refreshZonesAndCoverage}
                   onBack={() => {
                     setAutoDetectGpsInMap(false);
                     setInitialSearchQueryInMap('');
                     setHomeStep('destination');
                   }}
-                  onConfirmLocation={(confirmedLoc, confirmedCoverage) => {
+                  onConfirmLocation={(confirmedLoc, confirmedCoverage, gasSelection) => {
                     setCurrentLocation(confirmedLoc);
                     if (confirmedCoverage) {
                       setCoverageResult(confirmedCoverage);
                     }
+                    if (gasSelection) {
+                      setSelectedSize(gasSelection.cylinderSize);
+                      setBrandPreference(gasSelection.brandPreference);
+                      setQuantity(gasSelection.quantity);
+                      setPurchaseType(gasSelection.purchaseType);
+                      setFlowInitialSupplier(gasSelection.pinnedDepot);
+                    } else {
+                      setFlowInitialSupplier(null);
+                    }
                     setAutoDetectGpsInMap(false);
                     setInitialSearchQueryInMap('');
-                    setFlowInitialSupplier(null);
                     setOrderFlowTiming('asap');
                     setOrderFlowStep('select_gas');
                   }}
@@ -1429,7 +1441,7 @@ export default function App() {
           setFlowInitialSupplier(shop);
           setSelectedShopPinModal(null);
           setOrderFlowTiming('asap');
-          setOrderFlowStep('delivery_details');
+          setOrderFlowStep('order_summary');
         }}
       />
 

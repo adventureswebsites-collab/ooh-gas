@@ -42,6 +42,7 @@ import {
   AlertTriangle,
   Save,
   LocateFixed,
+  Clock,
 } from 'lucide-react';
 
 interface MapboxDeliveryMapProps {
@@ -75,6 +76,12 @@ interface MapboxDeliveryMapProps {
   hideSearchOverlay?: boolean;
   highlightedSupplierId?: string | null;
   showPreviewConnection?: boolean;
+  onPreviewRouteUpdated?: (info: {
+    supplierId: string;
+    distanceKm: number;
+    durationMin: number;
+    source?: 'mapbox' | 'osrm' | 'fallback';
+  } | null) => void;
 }
 
 // ==========================================
@@ -306,12 +313,20 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   hideSearchOverlay = false,
   highlightedSupplierId = null,
   showPreviewConnection = false,
+  onPreviewRouteUpdated,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-follow delivery vehicle toggle
   const [autoFollowVehicle, setAutoFollowVehicle] = useState(true);
   const [driverRouteInfo, setDriverRouteInfo] = useState<{ distanceKm: number; durationMin: number } | null>(null);
+  const [previewRouteData, setPreviewRouteData] = useState<{
+    supplierId: string;
+    coordinates: [number, number][];
+    distanceKm: number;
+    durationMin: number;
+    source?: 'mapbox' | 'osrm' | 'fallback';
+  } | null>(null);
   const currentRiderPosRef = useRef<[number, number] | null>(null);
   const riderHeadingRef = useRef<number>(0);
   const lastReroutedPosRef = useRef<[number, number] | null>(null);
@@ -371,7 +386,9 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const leafletRiderMarkerRef = useRef<L.Marker | null>(null);
   const leafletIdleRidersRef = useRef<L.Marker[]>([]);
   const leafletSupplierMarkersRef = useRef<L.Marker[]>([]);
+  const leafletRouteCasingRef = useRef<L.Polyline | null>(null);
   const leafletRouteLayerRef = useRef<L.Polyline | null>(null);
+  const leafletPreviewCasingRef = useRef<L.Polyline | null>(null);
   const leafletPreviewLineRef = useRef<L.Polyline | null>(null);
   const leafletZoneLayersRef = useRef<L.Polygon[]>([]);
   const leafletVertexMarkersRef = useRef<L.Marker[]>([]);
@@ -395,6 +412,67 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     lng: matchedSupplier?.coordinates?.lng ?? 36.7865,
     lat: matchedSupplier?.coordinates?.lat ?? -1.2785,
   };
+
+  // Resolve real road-following route + actual distance & ETA for previewed pinned depot
+  useEffect(() => {
+    if (isDedicatedTracking || adminEditingZone || !showPreviewConnection || !highlightedSupplierId) {
+      setPreviewRouteData(null);
+      onPreviewRouteUpdated?.(null);
+      return;
+    }
+
+    const eligibleIds = new Set((coverageResult?.eligibleSuppliers || []).map((s) => s.id));
+    const hasCoverageFilter = Boolean(
+      coverageResult &&
+        (coverageResult.matchedZones.length > 0 || coverageResult.isCovered || coverageResult.checkedAt)
+    );
+    const targetDepot = suppliers.find(
+      (s) => s.id === highlightedSupplierId && (!hasCoverageFilter || eligibleIds.has(s.id))
+    );
+
+    if (!targetDepot?.coordinates) {
+      setPreviewRouteData(null);
+      onPreviewRouteUpdated?.(null);
+      return;
+    }
+
+    let cancelled = false;
+    const origin: [number, number] = [targetDepot.coordinates.lng, targetDepot.coordinates.lat];
+    const destination: [number, number] = [customerCoords.lng, customerCoords.lat];
+
+    getDirectionsRoute(origin, destination, activeToken).then((route) => {
+      if (cancelled) return;
+      if (route && route.coordinates.length >= 2) {
+        setPreviewRouteData({
+          supplierId: targetDepot.id,
+          coordinates: route.coordinates,
+          distanceKm: route.distanceKm,
+          durationMin: route.durationMin,
+          source: route.source,
+        });
+        onPreviewRouteUpdated?.({
+          supplierId: targetDepot.id,
+          distanceKm: route.distanceKm,
+          durationMin: route.durationMin,
+          source: route.source,
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isDedicatedTracking,
+    adminEditingZone,
+    showPreviewConnection,
+    highlightedSupplierId,
+    suppliers,
+    coverageResult,
+    customerCoords.lng,
+    customerCoords.lat,
+    activeToken,
+  ]);
 
   // Sync token from localStorage or storage events
   useEffect(() => {
@@ -799,7 +877,11 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       leafletSupplierMarkersRef.current.push(marker);
     });
 
-    // Draw dashed preview connection & auto-fit camera when a depot has been found for entered location
+    // Draw solid road-following route & auto-fit camera when a depot has been found for entered location
+    if (leafletPreviewCasingRef.current) {
+      leafletPreviewCasingRef.current.remove();
+      leafletPreviewCasingRef.current = null;
+    }
     if (leafletPreviewLineRef.current) {
       leafletPreviewLineRef.current.remove();
       leafletPreviewLineRef.current = null;
@@ -818,25 +900,40 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
           lMap.invalidateSize({ pan: false });
         }
         if (foundDepot?.coordinates) {
-          if (showPreviewConnection) {
-            leafletPreviewLineRef.current = L.polyline(
-              [
-                [customerCoords.lat, customerCoords.lng],
+          const activeRoadRoute =
+            showPreviewConnection &&
+            previewRouteData &&
+            previewRouteData.supplierId === foundDepot.id &&
+            previewRouteData.coordinates.length >= 2
+              ? previewRouteData
+              : null;
+
+          const routeLatLngs: [number, number][] = activeRoadRoute
+            ? activeRoadRoute.coordinates.map(([lng, lat]) => [lat, lng] as [number, number])
+            : [
                 [foundDepot.coordinates.lat, foundDepot.coordinates.lng],
-              ],
-              {
-                color: '#0E8A45',
-                weight: 3,
-                opacity: 0.78,
-                dashArray: '7, 7',
-              }
-            ).addTo(lMap);
+                [customerCoords.lat, customerCoords.lng],
+              ];
+
+          if (activeRoadRoute) {
+            leafletPreviewCasingRef.current = L.polyline(routeLatLngs, {
+              color: '#064E3B',
+              weight: 8,
+              opacity: 0.25,
+              lineCap: 'round',
+              lineJoin: 'round',
+            }).addTo(lMap);
+
+            leafletPreviewLineRef.current = L.polyline(routeLatLngs, {
+              color: '#0E8A45',
+              weight: 4.5,
+              opacity: 0.96,
+              lineCap: 'round',
+              lineJoin: 'round',
+            }).addTo(lMap);
           }
 
-          const bounds = L.latLngBounds([
-            [customerCoords.lat, customerCoords.lng],
-            [foundDepot.coordinates.lat, foundDepot.coordinates.lng],
-          ]);
+          const bounds = L.latLngBounds(routeLatLngs);
           const refreshedSize = lMap.getSize();
           if (refreshedSize.x > 0 && refreshedSize.y > 0) {
             lMap.fitBounds(bounds, { padding: [65, 65], maxZoom: 15.5, animate: true });
@@ -862,6 +959,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     onSelectSupplierPin,
     highlightedSupplierId,
     showPreviewConnection,
+    previewRouteData,
     customerCoords.lat,
     customerCoords.lng,
     adminEditingZone,
@@ -927,15 +1025,35 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       const rawCoords = routeData?.coordinates || [origin, destination];
       const latLngs = rawCoords.map(([lng, lat]) => [lat, lng] as [number, number]);
 
+      if (routeData) {
+        setDriverRouteInfo({ distanceKm: routeData.distanceKm, durationMin: routeData.durationMin });
+        onDriverTelemetryUpdated?.({
+          distanceRemainingKm: routeData.distanceKm,
+          etaMinutes: routeData.durationMin,
+        });
+      }
+
+      if (leafletRouteCasingRef.current) {
+        leafletRouteCasingRef.current.remove();
+      }
       if (leafletRouteLayerRef.current) {
         leafletRouteLayerRef.current.remove();
       }
 
+      leafletRouteCasingRef.current = L.polyline(latLngs, {
+        color: '#064e3b',
+        weight: 8,
+        opacity: 0.28,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(lMap);
+
       leafletRouteLayerRef.current = L.polyline(latLngs, {
         color: '#10b981',
         weight: 5,
-        opacity: 0.85,
+        opacity: 0.94,
         lineCap: 'round',
+        lineJoin: 'round',
       }).addTo(lMap);
 
       lMap.fitBounds(leafletRouteLayerRef.current.getBounds(), { padding: [50, 50] });
@@ -1403,8 +1521,9 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       mapboxSupplierMarkersRef.current.push(depotMarker);
     });
 
-    // Mapbox GL: Dashed preview connection & auto-fit to customer + found depot
+    // Mapbox GL: Solid road-following preview connection & auto-fit to full road route
     const previewSourceId = 'depot-preview-connection-source';
+    const previewCasingLayerId = 'depot-preview-connection-casing';
     const previewLayerId = 'depot-preview-connection-line';
     const foundDepot = !isDedicatedTracking && !adminEditingZone && highlightedSupplierId
       ? suppliersToShow.find(
@@ -1412,22 +1531,27 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         )
       : undefined;
 
-    const previewFeatures: any[] =
-      foundDepot?.coordinates && showPreviewConnection
-        ? [
-            {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: [
-                  [customerCoords.lng, customerCoords.lat],
-                  [foundDepot.coordinates.lng, foundDepot.coordinates.lat],
-                ],
-              },
+    const activeRoadRoute =
+      foundDepot?.coordinates &&
+      showPreviewConnection &&
+      previewRouteData &&
+      previewRouteData.supplierId === foundDepot.id &&
+      previewRouteData.coordinates.length >= 2
+        ? previewRouteData
+        : null;
+
+    const previewFeatures: any[] = activeRoadRoute
+      ? [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: activeRoadRoute.coordinates,
             },
-          ]
-        : [];
+          },
+        ]
+      : [];
 
     const previewGeoJson: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1439,15 +1563,25 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     } else if (previewFeatures.length > 0) {
       map.addSource(previewSourceId, { type: 'geojson', data: previewGeoJson });
       map.addLayer({
+        id: previewCasingLayerId,
+        type: 'line',
+        source: previewSourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#064E3B',
+          'line-width': 7.5,
+          'line-opacity': 0.28,
+        },
+      });
+      map.addLayer({
         id: previewLayerId,
         type: 'line',
         source: previewSourceId,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#0E8A45',
-          'line-width': 3,
-          'line-dasharray': [2, 2],
-          'line-opacity': 0.85,
+          'line-width': 4.5,
+          'line-opacity': 0.96,
         },
       });
     }
@@ -1455,8 +1589,12 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     if (!isDedicatedTracking && !adminEditingZone) {
       if (foundDepot?.coordinates) {
         const bounds = new mapboxgl.LngLatBounds();
-        bounds.extend([customerCoords.lng, customerCoords.lat]);
-        bounds.extend([foundDepot.coordinates.lng, foundDepot.coordinates.lat]);
+        if (activeRoadRoute) {
+          activeRoadRoute.coordinates.forEach((coord) => bounds.extend(coord));
+        } else {
+          bounds.extend([customerCoords.lng, customerCoords.lat]);
+          bounds.extend([foundDepot.coordinates.lng, foundDepot.coordinates.lat]);
+        }
         map.fitBounds(bounds, { padding: 70, maxZoom: 15.5, duration: 650, essential: true });
       } else {
         map.easeTo({
@@ -1476,6 +1614,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     onSelectSupplierPin,
     highlightedSupplierId,
     showPreviewConnection,
+    previewRouteData,
     customerCoords.lng,
     customerCoords.lat,
     adminEditingZone,
@@ -2298,6 +2437,27 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
           <Layers className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Bottom-Left Road Distance & Estimated Delivery Time Pill (when depot route is active on Hero/Destination map) */}
+      {isHomeHero && !isDedicatedTracking && showPreviewConnection && previewRouteData && (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-20 max-w-[calc(100%-82px)]">
+          <div className="bg-white/95 backdrop-blur-md border border-neutral-200/90 shadow-lg rounded-2xl px-3 py-2 flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-xl bg-[#EDF6F1] text-[#0E8A45] flex items-center justify-center shrink-0">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div className="leading-tight min-w-0">
+              <div className="text-xs font-extrabold text-[#15191C] tabular-nums flex items-center gap-1.5 whitespace-nowrap">
+                <span>~{previewRouteData.durationMin} min</span>
+                <span className="text-neutral-300">·</span>
+                <span className="text-[#0E8A45]">{previewRouteData.distanceKm} km</span>
+              </div>
+              <div className="text-[10px] font-semibold text-[#6B7280] truncate">
+                Est. road delivery route
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Subtle Bottom-Left Current Pinned Area Badge (Hidden on compact Hero if clean, visible otherwise) */}
       {!isHomeHero && (

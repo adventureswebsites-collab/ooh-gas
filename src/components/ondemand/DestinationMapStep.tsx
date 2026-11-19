@@ -10,19 +10,21 @@ import {
   AlertTriangle,
   ArrowRight,
   Flame,
-  Star,
-  Clock,
-  Navigation,
+  Minus,
+  Plus,
 } from 'lucide-react';
 import { MapboxDeliveryMap } from '../map/MapboxDeliveryMap';
 import {
   CoverageCheckResult,
+  CylinderSize,
   DeliveryZone,
+  GasBrand,
   NairobiLocation,
+  PurchaseType,
   RiderInfo,
   Supplier,
 } from '../../types';
-import { NAIROBI_LOCATIONS } from '../../data/mockData';
+import { MARKET_BENCHMARK_PRICES, NAIROBI_LOCATIONS } from '../../data/mockData';
 import { GeocodedPlace, reverseGeocode, searchPlaces } from '../../services/mapboxService';
 import { checkDeliveryCoverage } from '../../services/deliveryZoneService';
 import { recordRecentDeliveryLocation } from '../../services/recentLocationsService';
@@ -30,6 +32,14 @@ import {
   findNearestDeliveryDepots,
   NearbyDepotSearchResult,
 } from '../../services/supplierMatchingService';
+
+export interface DestinationGasSelection {
+  cylinderSize: CylinderSize;
+  brandPreference: GasBrand;
+  quantity: number;
+  purchaseType: PurchaseType;
+  pinnedDepot: Supplier | null;
+}
 
 interface DestinationMapStepProps {
   initialLocation: NairobiLocation;
@@ -40,10 +50,26 @@ interface DestinationMapStepProps {
   suppliers: Supplier[];
   riders: RiderInfo[];
   zones: DeliveryZone[];
+  initialSize?: CylinderSize;
+  initialBrandPreference?: GasBrand;
+  initialQuantity?: number;
+  initialPurchaseType?: PurchaseType;
   onZonesUpdated: () => void;
   onBack: () => void;
-  onConfirmLocation: (confirmedLocation: NairobiLocation, coverage: CoverageCheckResult | null) => void;
+  onConfirmLocation: (
+    confirmedLocation: NairobiLocation,
+    coverage: CoverageCheckResult | null,
+    gasSelection: DestinationGasSelection
+  ) => void;
 }
+
+const GAS_COMPANIES: Array<{ brand: 'K-Gas' | 'TotalEnergies' | 'Shell Gas'; label: string }> = [
+  { brand: 'K-Gas', label: 'K-Gas' },
+  { brand: 'TotalEnergies', label: 'TotalEnergies' },
+  { brand: 'Shell Gas', label: 'Shell Gas' },
+];
+
+const QUICK_CYLINDER_SIZES: CylinderSize[] = ['6kg', '13kg', '22.5kg', '29kg'];
 
 export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   initialLocation,
@@ -54,6 +80,10 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   suppliers,
   riders,
   zones,
+  initialSize = '13kg',
+  initialBrandPreference = 'Any',
+  initialQuantity = 1,
+  initialPurchaseType = 'refill',
   onZonesUpdated,
   onBack,
   onConfirmLocation,
@@ -74,6 +104,18 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   const [depotSearchTrigger, setDepotSearchTrigger] = useState<number>(
     autoSearchDepotsOnMount ? 1 : 0
   );
+  const [roadRouteInfo, setRoadRouteInfo] = useState<{
+    supplierId: string;
+    distanceKm: number;
+    durationMin: number;
+    source?: 'mapbox' | 'osrm' | 'fallback';
+  } | null>(null);
+
+  // Choose Your Gas (Gas Company, Cylinder kg, Amount / Quantity) state in bottom panel
+  const [selectedSize, setSelectedSize] = useState<CylinderSize>(initialSize);
+  const [selectedBrand, setSelectedBrand] = useState<GasBrand>(initialBrandPreference);
+  const [quantity, setQuantity] = useState<number>(Math.max(1, initialQuantity));
+  const [purchaseType, setPurchaseType] = useState<PurchaseType>(initialPurchaseType);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -141,24 +183,37 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   );
 
   // Automatically pin the nearest found delivery depot directly onto the map
+  // Respect chosen gas company if a matching nearby depot exists
   useEffect(() => {
     if (isSearchingDepots || isCheckingCoverage) return;
     if (depotSearchResult.found && depotSearchResult.primaryDepot) {
+      const brandMatch =
+        selectedBrand !== 'Any'
+          ? depotSearchResult.nearbyDepots.find((d) => d.brand === selectedBrand)
+          : undefined;
       setPinnedDepotId((prev) => {
+        if (brandMatch) return brandMatch.id;
         const stillExists = depotSearchResult.nearbyDepots.some((d) => d.id === prev);
         return stillExists && prev ? prev : depotSearchResult.primaryDepot!.id;
       });
     } else {
       setPinnedDepotId(null);
     }
-  }, [isSearchingDepots, isCheckingCoverage, depotSearchResult]);
+  }, [isSearchingDepots, isCheckingCoverage, depotSearchResult, selectedBrand]);
 
-  // Merge live calculated distances into suppliers passed to the map so map pins show exact km
+  // Merge live calculated (and actual road-routed) distances into suppliers passed to the map
   const suppliersWithLiveDistance: Supplier[] = useMemo(() => {
     if (depotSearchResult.nearbyDepots.length === 0) return suppliers;
     const byId = new Map(depotSearchResult.nearbyDepots.map((d) => [d.id, d]));
-    return suppliers.map((s) => byId.get(s.id) || s);
-  }, [suppliers, depotSearchResult.nearbyDepots]);
+    return suppliers.map((s) => {
+      const matched = byId.get(s.id);
+      if (!matched) return s;
+      if (roadRouteInfo && roadRouteInfo.supplierId === matched.id) {
+        return { ...matched, distanceKm: roadRouteInfo.distanceKm };
+      }
+      return matched;
+    });
+  }, [suppliers, depotSearchResult.nearbyDepots, roadRouteInfo]);
 
   const activePinnedDepot = useMemo(() => {
     if (!depotSearchResult.found) return null;
@@ -167,6 +222,66 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       depotSearchResult.primaryDepot
     );
   }, [depotSearchResult, pinnedDepotId]);
+
+  const activeRouteMetrics = useMemo(() => {
+    if (!activePinnedDepot) return null;
+    if (roadRouteInfo && roadRouteInfo.supplierId === activePinnedDepot.id) {
+      return {
+        distanceKm: roadRouteInfo.distanceKm,
+        durationMin: roadRouteInfo.durationMin,
+      };
+    }
+    const estRoadKm = Math.max(
+      0.2,
+      Math.round(activePinnedDepot.calculatedDistanceKm * 1.32 * 10) / 10
+    );
+    const estMinutes = Math.max(3, Math.round((estRoadKm / 22) * 60));
+    return { distanceKm: estRoadKm, durationMin: estMinutes };
+  }, [activePinnedDepot, roadRouteInfo]);
+
+  const effectiveBrandForPrice: 'K-Gas' | 'TotalEnergies' | 'Shell Gas' | null = useMemo(() => {
+    if (selectedBrand !== 'Any') return selectedBrand;
+    return activePinnedDepot?.brand || null;
+  }, [selectedBrand, activePinnedDepot]);
+
+  const pricingSupplier = useMemo(() => {
+    if (selectedBrand !== 'Any') {
+      return (
+        depotSearchResult.nearbyDepots.find((d) => d.brand === selectedBrand) ||
+        suppliers.find((s) => s.brand === selectedBrand) ||
+        activePinnedDepot
+      );
+    }
+    return activePinnedDepot || suppliers[0] || null;
+  }, [selectedBrand, depotSearchResult.nearbyDepots, suppliers, activePinnedDepot]);
+
+  const getSizePricing = (size: CylinderSize): { unitPrice: number; inStock: boolean } => {
+    const supCyl = pricingSupplier?.cylinders.find((c) => c.size === size);
+    if (supCyl) {
+      return {
+        unitPrice: purchaseType === 'refill' ? supCyl.refillPrice : supCyl.completePrice,
+        inStock: supCyl.inStock !== false,
+      };
+    }
+    const bench = MARKET_BENCHMARK_PRICES[size];
+    return {
+      unitPrice: purchaseType === 'refill' ? bench.refillPrice : bench.completePrice,
+      inStock: true,
+    };
+  };
+
+  const selectedSizePricing = getSizePricing(selectedSize);
+  const gasSubtotal = selectedSizePricing.unitPrice * quantity;
+
+  // Ensure selectedSize stays on an in-stock cylinder when switching gas companies
+  useEffect(() => {
+    if (!selectedSizePricing.inStock) {
+      const firstInStock = QUICK_CYLINDER_SIZES.find((sz) => getSizePricing(sz).inStock);
+      if (firstInStock) {
+        setSelectedSize(firstInStock);
+      }
+    }
+  }, [pricingSupplier, selectedSizePricing.inStock]);
 
   // Trigger device GPS location if customer tapped "Current location"
   const handleUseCurrentGps = () => {
@@ -313,7 +428,13 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
 
   const handleConfirm = () => {
     recordRecentDeliveryLocation(selectedLocation, customerId);
-    onConfirmLocation(selectedLocation, coverage);
+    onConfirmLocation(selectedLocation, coverage, {
+      cylinderSize: selectedSize,
+      brandPreference: selectedBrand,
+      quantity,
+      purchaseType,
+      pinnedDepot: pricingSupplier || activePinnedDepot || null,
+    });
   };
 
   const isCovered = coverage ? coverage.isCovered : true;
@@ -433,7 +554,7 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       </div>
 
       {/* Interactive Real Map (Mapbox / Leaflet) */}
-      <div className="relative flex-1 flex flex-col min-h-[380px] sm:min-h-[460px]">
+      <div className="relative flex-1 flex flex-col min-h-[290px] sm:min-h-[360px]">
         <MapboxDeliveryMap
           isHomeHero={true}
           hideSearchOverlay={true}
@@ -447,8 +568,10 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
           onZonesUpdated={onZonesUpdated}
           highlightedSupplierId={isSearchingDepots ? null : pinnedDepotId}
           showPreviewConnection={!isSearchingDepots && Boolean(activePinnedDepot)}
+          onPreviewRouteUpdated={setRoadRouteInfo}
           onSelectSupplierPin={(sup) => {
             setPinnedDepotId(sup.id);
+            setSelectedBrand(sup.brand);
           }}
           onOpenLocationModal={() => setIsDropdownOpen(true)}
           onSelectLocation={(newLoc) => {
@@ -457,7 +580,7 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
             setPinnedDepotId(null);
             setDepotSearchTrigger((n) => n + 1);
           }}
-          heightClassName="flex-1 h-[48dvh] min-h-[380px] sm:h-[54dvh] sm:min-h-[460px]"
+          heightClassName="flex-1 h-[38dvh] min-h-[290px] sm:h-[44dvh] sm:min-h-[360px]"
         />
 
         {/* Searching Nearby Gas Stations Live Screen Overlay */}
@@ -486,7 +609,10 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
             <div className="bg-[#0E8A45] text-white text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 whitespace-nowrap truncate">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">
-                Depot found &amp; pinned: {activePinnedDepot.name} ({activePinnedDepot.calculatedDistanceKm} km)
+                {activePinnedDepot.name} ·{' '}
+                {activeRouteMetrics
+                  ? `${activeRouteMetrics.distanceKm} km · ~${activeRouteMetrics.durationMin} min`
+                  : `${activePinnedDepot.calculatedDistanceKm} km`}
               </span>
             </div>
           </div>
@@ -499,122 +625,176 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
         )}
       </div>
 
-      {/* Bottom Selected Destination & Found Delivery Depot Card */}
-      <div className="bg-white border-t border-neutral-200/90 rounded-t-3xl shadow-[0_-8px_30px_rgba(15,23,42,0.08)] px-4 sm:px-6 py-4 z-20 space-y-3">
-        <div className="flex items-start gap-3">
-          <div
-            className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
-              isSearchingDepots
-                ? 'bg-[#E6F7ED] text-[#0E8A45]'
-                : isCovered
-                  ? 'bg-[#EDF6F1] text-[#0E8A45]'
-                  : 'bg-rose-50 text-rose-600'
-            }`}
-          >
-            {isSearchingDepots ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <MapPin className="w-5 h-5" />
-            )}
-          </div>
+      {/* Bottom "Choose your gas" Sheet with Amount, Gas Company & Cylinder kg */}
+      <div className="bg-white border-t border-neutral-200/90 rounded-t-3xl shadow-[0_-8px_30px_rgba(15,23,42,0.08)] px-4 sm:px-6 py-4 z-20 space-y-3.5">
+        {/* Title Row: "Choose your gas" + Live KSh Amount */}
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-[#6B7280]">
-                Delivery Location
-              </p>
-              {isSearchingDepots || isCheckingCoverage ? (
-                <span className="text-[11px] font-bold text-[#0E8A45] inline-flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  Searching depots...
-                </span>
-              ) : isCovered && activePinnedDepot ? (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#0E8A45]">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  {depotSearchResult.nearbyDepots.length} nearby{' '}
-                  {depotSearchResult.nearbyDepots.length === 1 ? 'depot' : 'depots'} pinned
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  Outside delivery zone
+            <h2 className="text-base sm:text-lg font-extrabold text-[#15191C] tracking-tight leading-tight">
+              Choose your gas
+            </h2>
+            <div className="flex items-center gap-1.5 text-xs text-[#6B7280] mt-0.5 truncate">
+              <MapPin className="w-3.5 h-3.5 text-[#0E8A45] shrink-0" />
+              <span className="font-semibold text-[#15191C] truncate">{selectedLocation.name}</span>
+              {!isSearchingDepots && activePinnedDepot && (
+                <span className="truncate text-[#0E8A45] font-semibold shrink-0">
+                  · {activePinnedDepot.name} (
+                  {activeRouteMetrics
+                    ? `${activeRouteMetrics.distanceKm} km · ~${activeRouteMetrics.durationMin} min`
+                    : `${activePinnedDepot.calculatedDistanceKm} km`}
+                  )
                 </span>
               )}
             </div>
-            <p className="text-sm sm:text-base font-extrabold text-[#15191C] truncate mt-0.5">
-              {selectedLocation.name}
-            </p>
-            <p className="text-xs text-[#6B7280] truncate">{selectedLocation.area}</p>
+          </div>
+
+          <div className="text-right shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#6B7280] block">
+              Amount
+            </span>
+            <span className="text-base sm:text-lg font-extrabold text-[#0E8A45] tabular-nums">
+              KSh {gasSubtotal.toLocaleString()}
+            </span>
           </div>
         </div>
 
-        {/* Found Delivery Depot Summary Card (pinned directly on map) */}
-        {!isSearchingDepots && activePinnedDepot && (
-          <div className="rounded-2xl bg-[#F4FBF7] border border-[#0E8A45]/25 p-3 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#0E8A45] text-white font-extrabold text-xs flex items-center justify-center shrink-0">
-                  {activePinnedDepot.brandLettermark}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs sm:text-sm font-extrabold text-[#15191C] truncate">
-                      {activePinnedDepot.name}
-                    </span>
-                    <span className="text-[10px] font-bold text-[#0E8A45] bg-white border border-[#0E8A45]/25 px-1.5 py-0.5 rounded-md shrink-0">
-                      Pinned on Map
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[11px] text-[#6B7280] mt-0.5 flex-wrap">
-                    <span className="inline-flex items-center gap-0.5 font-bold text-[#15191C]">
-                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                      {activePinnedDepot.rating.toFixed(1)}
-                    </span>
-                    <span>·</span>
-                    <span className="inline-flex items-center gap-1 font-semibold text-[#0E8A45] tabular-nums">
-                      <Navigation className="w-3 h-3" />
-                      {activePinnedDepot.calculatedDistanceKm} km
-                    </span>
-                    <span>·</span>
-                    <span className="inline-flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {activePinnedDepot.deliveryTimeMin}
-                    </span>
-                  </div>
-                </div>
-              </div>
+        {/* Gas Company Selection */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="font-bold text-[#6B7280]">Gas company</span>
+            <span className="font-semibold text-[#15191C]">
+              {effectiveBrandForPrice || 'Any verified depot'}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {GAS_COMPANIES.map(({ brand, label }) => {
+              const matchedDepot = depotSearchResult.nearbyDepots.find((d) => d.brand === brand);
+              const isSelected = selectedBrand === brand;
+              const isRoutedMatch =
+                Boolean(matchedDepot && roadRouteInfo && roadRouteInfo.supplierId === matchedDepot.id);
+              const displayKm = matchedDepot
+                ? isRoutedMatch && roadRouteInfo
+                  ? roadRouteInfo.distanceKm
+                  : matchedDepot.calculatedDistanceKm
+                : null;
+              const displayMin =
+                isRoutedMatch && roadRouteInfo
+                  ? roadRouteInfo.durationMin
+                  : matchedDepot
+                  ? Math.max(3, Math.round(((matchedDepot.calculatedDistanceKm * 1.32) / 22) * 60))
+                  : null;
+              return (
+                <button
+                  key={brand}
+                  type="button"
+                  onClick={() => {
+                    setSelectedBrand(brand);
+                    if (matchedDepot) setPinnedDepotId(matchedDepot.id);
+                  }}
+                  className={`min-h-[44px] px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-center ${
+                    isSelected
+                      ? 'bg-[#EDF6F1] border-[#0E8A45] text-[#0E8A45] ring-1 ring-[#0E8A45]/30'
+                      : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/45'
+                  }`}
+                >
+                  <span className="text-xs font-extrabold truncate block">{label}</span>
+                  <span className="text-[10px] font-semibold text-[#6B7280] tabular-nums truncate block">
+                    {displayKm !== null && displayMin !== null
+                      ? `${displayKm} km · ~${displayMin}m`
+                      : 'Available'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
-              <div className="text-right shrink-0">
-                <span className="text-[10px] text-[#6B7280] block">From</span>
-                <span className="text-xs font-extrabold text-[#0E8A45] tabular-nums">
-                  KSh {activePinnedDepot.lowestRefillPrice.toLocaleString()}
-                </span>
-              </div>
+        {/* Cylinder Weight (kg) + Refill/New + Quantity Stepper */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold text-[#6B7280]">Cylinder size (kg)</span>
+            <div className="inline-flex items-center rounded-lg bg-[#F6F7F8] p-0.5 border border-neutral-200/80">
+              <button
+                type="button"
+                onClick={() => setPurchaseType('refill')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                  purchaseType === 'refill'
+                    ? 'bg-white text-[#15191C] shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                Refill
+              </button>
+              <button
+                type="button"
+                onClick={() => setPurchaseType('complete')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                  purchaseType === 'complete'
+                    ? 'bg-white text-[#15191C] shadow-xs'
+                    : 'text-[#6B7280] hover:text-[#15191C]'
+                }`}
+              >
+                New + Gas
+              </button>
             </div>
+          </div>
 
-            {depotSearchResult.nearbyDepots.length > 1 && (
-              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pt-1 border-t border-[#0E8A45]/10">
-                <span className="text-[10px] font-bold text-[#6B7280] shrink-0">Nearby:</span>
-                {depotSearchResult.nearbyDepots.map((depot) => {
-                  const isSelected = depot.id === activePinnedDepot.id;
-                  return (
-                    <button
-                      key={depot.id}
-                      type="button"
-                      onClick={() => setPinnedDepotId(depot.id)}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer shrink-0 ${
-                        isSelected
-                          ? 'bg-[#0E8A45] text-white'
-                          : 'bg-white border border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/40'
+          <div className="flex items-stretch gap-2">
+            <div className="grid grid-cols-4 gap-1.5 flex-1">
+              {QUICK_CYLINDER_SIZES.map((sz) => {
+                const { unitPrice, inStock } = getSizePricing(sz);
+                const isSelected = selectedSize === sz;
+                return (
+                  <button
+                    key={sz}
+                    type="button"
+                    disabled={!inStock}
+                    onClick={() => setSelectedSize(sz)}
+                    className={`min-h-[48px] px-1.5 py-1.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center disabled:opacity-45 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? 'bg-[#0E8A45] border-[#0E8A45] text-white shadow-xs'
+                        : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/50'
+                    }`}
+                  >
+                    <span className="text-xs font-extrabold leading-tight whitespace-nowrap">
+                      {sz}
+                    </span>
+                    <span
+                      className={`text-[10px] font-semibold tabular-nums whitespace-nowrap mt-0.5 ${
+                        isSelected ? 'text-emerald-100' : 'text-[#6B7280]'
                       }`}
                     >
-                      {depot.brand} · {depot.calculatedDistanceKm} km
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+                      {inStock ? `KSh ${unitPrice.toLocaleString()}` : 'Out'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Cylinder Quantity Stepper */}
+            <div className="flex items-center gap-1 rounded-xl border border-neutral-200 bg-[#F6F7F8] px-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                aria-label="Decrease cylinder quantity"
+                className="w-8 h-9 flex items-center justify-center rounded-lg hover:bg-white text-[#15191C] cursor-pointer"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+              <span className="w-5 text-center text-xs font-extrabold text-[#15191C] tabular-nums">
+                {quantity}
+              </span>
+              <button
+                type="button"
+                onClick={() => setQuantity((q) => Math.min(5, q + 1))}
+                aria-label="Increase cylinder quantity"
+                className="w-8 h-9 flex items-center justify-center rounded-lg hover:bg-white text-[#15191C] cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        )}
+        </div>
 
         {!isSearchingDepots && !isCovered && coverage && (
           <div className="bg-rose-50 border border-rose-200 rounded-2xl px-3.5 py-2 text-xs font-medium text-rose-800 flex items-start gap-2">
@@ -636,12 +816,14 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
               : 'bg-neutral-900 hover:bg-neutral-800 text-white'
           }`}
         >
-          <span>
+          <span className="truncate">
             {isSearchingDepots
               ? 'Searching Nearby Gas Stations...'
-              : 'Confirm Delivery Location & Depot'}
+              : `Confirm ${quantity}× ${selectedSize} ${
+                  effectiveBrandForPrice || 'Gas'
+                } · KSh ${gasSubtotal.toLocaleString()}`}
           </span>
-          <ArrowRight className="w-4.5 h-4.5" />
+          <ArrowRight className="w-4.5 h-4.5 shrink-0" />
         </button>
       </div>
     </div>
