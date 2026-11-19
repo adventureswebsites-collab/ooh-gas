@@ -333,6 +333,20 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
   const lastReroutedTimeRef = useRef<number>(0);
   const currentRouteCoordsRef = useRef<[number, number][]>([]);
 
+  // Stable refs for parent callbacks and route deduping so parent re-renders never cause marker/route loops
+  const onSelectLocationRef = useRef(onSelectLocation);
+  onSelectLocationRef.current = onSelectLocation;
+  const onSelectSupplierPinRef = useRef(onSelectSupplierPin);
+  onSelectSupplierPinRef.current = onSelectSupplierPin;
+  const onSelectRiderPinRef = useRef(onSelectRiderPin);
+  onSelectRiderPinRef.current = onSelectRiderPin;
+  const onDriverTelemetryUpdatedRef = useRef(onDriverTelemetryUpdated);
+  onDriverTelemetryUpdatedRef.current = onDriverTelemetryUpdated;
+  const onPreviewRouteUpdatedRef = useRef(onPreviewRouteUpdated);
+  onPreviewRouteUpdatedRef.current = onPreviewRouteUpdated;
+  const lastEmittedPreviewKeyRef = useRef<string>('');
+  const lastFittedViewKeyRef = useRef<string>('');
+
 
   // Engine state: mapbox-gl (if WebGL available AND token set) or clean Google Maps-style Leaflet Voyager road tiles
   const [engine, setEngine] = useState<'mapbox-gl' | 'leaflet'>(() => {
@@ -413,49 +427,77 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     lat: matchedSupplier?.coordinates?.lat ?? -1.2785,
   };
 
+  const eligiblePreviewIdsKey = (coverageResult?.eligibleSuppliers || [])
+    .map((s) => s.id)
+    .join(',');
+  const hasPreviewCoverageFilter = Boolean(
+    coverageResult &&
+      (coverageResult.matchedZones.length > 0 || coverageResult.isCovered || coverageResult.checkedAt)
+  );
+  const previewTargetDepot = highlightedSupplierId
+    ? suppliers.find(
+        (s) =>
+          s.id === highlightedSupplierId &&
+          (!hasPreviewCoverageFilter || (coverageResult?.eligibleSuppliers || []).some((e) => e.id === s.id))
+      )
+    : undefined;
+  const previewTargetId = previewTargetDepot?.id || null;
+  const previewTargetLng = previewTargetDepot?.coordinates?.lng ?? null;
+  const previewTargetLat = previewTargetDepot?.coordinates?.lat ?? null;
+
   // Resolve real road-following route + actual distance & ETA for previewed pinned depot
   useEffect(() => {
-    if (isDedicatedTracking || adminEditingZone || !showPreviewConnection || !highlightedSupplierId) {
-      setPreviewRouteData(null);
-      onPreviewRouteUpdated?.(null);
-      return;
-    }
-
-    const eligibleIds = new Set((coverageResult?.eligibleSuppliers || []).map((s) => s.id));
-    const hasCoverageFilter = Boolean(
-      coverageResult &&
-        (coverageResult.matchedZones.length > 0 || coverageResult.isCovered || coverageResult.checkedAt)
-    );
-    const targetDepot = suppliers.find(
-      (s) => s.id === highlightedSupplierId && (!hasCoverageFilter || eligibleIds.has(s.id))
-    );
-
-    if (!targetDepot?.coordinates) {
-      setPreviewRouteData(null);
-      onPreviewRouteUpdated?.(null);
+    if (
+      isDedicatedTracking ||
+      Boolean(adminEditingZone) ||
+      !showPreviewConnection ||
+      !previewTargetId ||
+      previewTargetLng === null ||
+      previewTargetLat === null
+    ) {
+      setPreviewRouteData((prev) => (prev === null ? prev : null));
+      if (lastEmittedPreviewKeyRef.current !== '') {
+        lastEmittedPreviewKeyRef.current = '';
+        onPreviewRouteUpdatedRef.current?.(null);
+      }
       return;
     }
 
     let cancelled = false;
-    const origin: [number, number] = [targetDepot.coordinates.lng, targetDepot.coordinates.lat];
+    const origin: [number, number] = [previewTargetLng, previewTargetLat];
     const destination: [number, number] = [customerCoords.lng, customerCoords.lat];
 
     getDirectionsRoute(origin, destination, activeToken).then((route) => {
       if (cancelled) return;
       if (route && route.coordinates.length >= 2) {
-        setPreviewRouteData({
-          supplierId: targetDepot.id,
-          coordinates: route.coordinates,
-          distanceKm: route.distanceKm,
-          durationMin: route.durationMin,
-          source: route.source,
+        const nextKey = `${previewTargetId}|${origin[0].toFixed(4)},${origin[1].toFixed(4)}->${destination[0].toFixed(4)},${destination[1].toFixed(4)}|${route.distanceKm}|${route.durationMin}|${route.source || ''}`;
+        setPreviewRouteData((prev) => {
+          if (
+            prev &&
+            prev.supplierId === previewTargetId &&
+            prev.distanceKm === route.distanceKm &&
+            prev.durationMin === route.durationMin &&
+            prev.coordinates.length === route.coordinates.length
+          ) {
+            return prev;
+          }
+          return {
+            supplierId: previewTargetId,
+            coordinates: route.coordinates,
+            distanceKm: route.distanceKm,
+            durationMin: route.durationMin,
+            source: route.source,
+          };
         });
-        onPreviewRouteUpdated?.({
-          supplierId: targetDepot.id,
-          distanceKm: route.distanceKm,
-          durationMin: route.durationMin,
-          source: route.source,
-        });
+        if (lastEmittedPreviewKeyRef.current !== nextKey) {
+          lastEmittedPreviewKeyRef.current = nextKey;
+          onPreviewRouteUpdatedRef.current?.({
+            supplierId: previewTargetId,
+            distanceKm: route.distanceKm,
+            durationMin: route.durationMin,
+            source: route.source,
+          });
+        }
       }
     });
 
@@ -466,9 +508,10 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     isDedicatedTracking,
     adminEditingZone,
     showPreviewConnection,
-    highlightedSupplierId,
-    suppliers,
-    coverageResult,
+    previewTargetId,
+    previewTargetLng,
+    previewTargetLat,
+    eligiblePreviewIdsKey,
     customerCoords.lng,
     customerCoords.lat,
     activeToken,
@@ -550,8 +593,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
             y: 50,
           },
         };
-        if (onSelectLocation) {
-          onSelectLocation(updatedLocation);
+        if (onSelectLocationRef.current) {
+          onSelectLocationRef.current(updatedLocation);
         }
       } catch (err) {
         console.error('Reverse geocode error:', err);
@@ -559,7 +602,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         setIsGeocoding(false);
       }
     },
-    [activeToken, onSelectLocation]
+    [activeToken]
   );
 
   // ==========================================
@@ -681,8 +724,15 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       handlePinMoved(lng, lat);
     });
 
+    let resizeRafId: number | null = null;
     const resizeObserver = new ResizeObserver(() => {
-      lMap.invalidateSize({ pan: false });
+      if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
+      resizeRafId = requestAnimationFrame(() => {
+        const el = mapContainerRef.current;
+        if (el && el.clientWidth > 0 && el.clientHeight > 0) {
+          lMap.invalidateSize({ pan: false });
+        }
+      });
     });
     if (mapContainerRef.current) {
       resizeObserver.observe(mapContainerRef.current);
@@ -690,6 +740,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
     return () => {
       cancelAnimationFrame(rafId);
+      if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       window.clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       lMap.remove();
@@ -868,8 +919,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
         icon: depotIcon,
         zIndexOffset: isHighlighted ? 500 : 0,
       }).addTo(lMap);
-      if (onSelectSupplierPin) {
-        marker.on('click', () => onSelectSupplierPin(sup));
+      if (onSelectSupplierPinRef.current) {
+        marker.on('click', () => onSelectSupplierPinRef.current?.(sup));
       } else {
         marker.bindPopup(popupHtml, { maxWidth: 260, closeButton: true });
       }
@@ -933,17 +984,25 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
             }).addTo(lMap);
           }
 
-          const bounds = L.latLngBounds(routeLatLngs);
-          const refreshedSize = lMap.getSize();
-          if (refreshedSize.x > 0 && refreshedSize.y > 0) {
-            lMap.fitBounds(bounds, { padding: [65, 65], maxZoom: 15.5, animate: true });
-          } else {
-            lMap.setView([customerCoords.lat, customerCoords.lng], 14, { animate: false });
+          const viewKey = `leaflet|${foundDepot.id}|${customerCoords.lat.toFixed(4)},${customerCoords.lng.toFixed(4)}|${Boolean(activeRoadRoute)}`;
+          if (lastFittedViewKeyRef.current !== viewKey) {
+            lastFittedViewKeyRef.current = viewKey;
+            const bounds = L.latLngBounds(routeLatLngs);
+            const refreshedSize = lMap.getSize();
+            if (refreshedSize.x > 0 && refreshedSize.y > 0) {
+              lMap.fitBounds(bounds, { padding: [65, 65], maxZoom: 15.5, animate: true });
+            } else {
+              lMap.setView([customerCoords.lat, customerCoords.lng], 14, { animate: false });
+            }
           }
         } else {
-          lMap.setView([customerCoords.lat, customerCoords.lng], lMap.getZoom() || 14.5, {
-            animate: true,
-          });
+          const viewKey = `leaflet|center|${customerCoords.lat.toFixed(4)},${customerCoords.lng.toFixed(4)}`;
+          if (lastFittedViewKeyRef.current !== viewKey) {
+            lastFittedViewKeyRef.current = viewKey;
+            lMap.setView([customerCoords.lat, customerCoords.lng], lMap.getZoom() || 14.5, {
+              animate: true,
+            });
+          }
         }
       } catch {
         // Guard against transient 0px container states during unmount/resize
@@ -956,7 +1015,6 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     matchedSupplier,
     isDedicatedTracking,
     coverageResult,
-    onSelectSupplierPin,
     highlightedSupplierId,
     showPreviewConnection,
     previewRouteData,
@@ -996,8 +1054,8 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       });
 
       const marker = L.marker([lat, lng], { icon: bikeIcon }).addTo(lMap);
-      if (onSelectRiderPin) {
-        marker.on('click', () => onSelectRiderPin(rider));
+      if (onSelectRiderPinRef.current) {
+        marker.on('click', () => onSelectRiderPinRef.current?.(rider));
       } else {
         marker.bindPopup(
           `<div style="padding:8px 10px;font-family:sans-serif;font-size:11px;min-width:160px;">
@@ -1010,7 +1068,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
       leafletIdleRidersRef.current.push(marker);
     });
-  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng, onSelectRiderPin]);
+  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng]);
 
   // Leaflet: Dedicated tracking route & moving rider
   useEffect(() => {
@@ -1437,27 +1495,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       map.setLayoutProperty(lineLayerId, 'visibility', showZonesOverlay ? 'visible' : 'none');
     }
 
-    // Subtle breathing glow animation for active zones
-    const prefersReducedMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    if (!prefersReducedMotion && showZonesOverlay) {
-      let animStart = performance.now();
-      const animateBoundaryGlow = (timestamp: number) => {
-        if (!mapboxMapRef.current || !mapboxMapRef.current.getLayer(glowLayerId)) return;
-        const elapsed = timestamp - animStart;
-        const dynamicOpacity = 0.25 + 0.18 * Math.sin(elapsed / 650);
-        try {
-          mapboxMapRef.current.setPaintProperty(glowLayerId, 'line-opacity', dynamicOpacity);
-        } catch {
-          // Map layer may have been unmounted
-        }
-        mapboxAnimationFrameRef.current = requestAnimationFrame(animateBoundaryGlow);
-      };
-      mapboxAnimationFrameRef.current = requestAnimationFrame(animateBoundaryGlow);
-    }
-
+    // Clean static aura opacity (avoids 60fps continuous WebGL setPaintProperty loops on mobile)
     return () => {
       if (mapboxAnimationFrameRef.current) {
         cancelAnimationFrame(mapboxAnimationFrameRef.current);
@@ -1500,17 +1538,17 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       );
       const popupHtml = createSupplierPopupHtml(sup, isServing, isOutOfArea, hasLocationSelection);
 
-      if (onSelectSupplierPin) {
+      if (onSelectSupplierPinRef.current) {
         depotEl.addEventListener('click', (e) => {
           e.stopPropagation();
-          onSelectSupplierPin(sup);
+          onSelectSupplierPinRef.current?.(sup);
         });
       }
 
       const depotMarker = new mapboxgl.Marker({ element: depotEl, anchor: 'bottom-left' })
         .setLngLat([lng, lat]);
 
-      if (!onSelectSupplierPin) {
+      if (!onSelectSupplierPinRef.current) {
         const popup = new mapboxgl.Popup({ offset: 24, closeButton: true, maxWidth: '260px' }).setHTML(
           popupHtml
         );
@@ -1588,20 +1626,28 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
     if (!isDedicatedTracking && !adminEditingZone) {
       if (foundDepot?.coordinates) {
-        const bounds = new mapboxgl.LngLatBounds();
-        if (activeRoadRoute) {
-          activeRoadRoute.coordinates.forEach((coord) => bounds.extend(coord));
-        } else {
-          bounds.extend([customerCoords.lng, customerCoords.lat]);
-          bounds.extend([foundDepot.coordinates.lng, foundDepot.coordinates.lat]);
+        const viewKey = `mapbox|${foundDepot.id}|${customerCoords.lat.toFixed(4)},${customerCoords.lng.toFixed(4)}|${Boolean(activeRoadRoute)}`;
+        if (lastFittedViewKeyRef.current !== viewKey) {
+          lastFittedViewKeyRef.current = viewKey;
+          const bounds = new mapboxgl.LngLatBounds();
+          if (activeRoadRoute) {
+            activeRoadRoute.coordinates.forEach((coord) => bounds.extend(coord));
+          } else {
+            bounds.extend([customerCoords.lng, customerCoords.lat]);
+            bounds.extend([foundDepot.coordinates.lng, foundDepot.coordinates.lat]);
+          }
+          map.fitBounds(bounds, { padding: 70, maxZoom: 15.5, duration: 650, essential: true });
         }
-        map.fitBounds(bounds, { padding: 70, maxZoom: 15.5, duration: 650, essential: true });
       } else {
-        map.easeTo({
-          center: [customerCoords.lng, customerCoords.lat],
-          duration: 500,
-          essential: true,
-        });
+        const viewKey = `mapbox|center|${customerCoords.lat.toFixed(4)},${customerCoords.lng.toFixed(4)}`;
+        if (lastFittedViewKeyRef.current !== viewKey) {
+          lastFittedViewKeyRef.current = viewKey;
+          map.easeTo({
+            center: [customerCoords.lng, customerCoords.lat],
+            duration: 500,
+            essential: true,
+          });
+        }
       }
     }
   }, [
@@ -1611,7 +1657,6 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
     matchedSupplier,
     isDedicatedTracking,
     coverageResult,
-    onSelectSupplierPin,
     highlightedSupplierId,
     showPreviewConnection,
     previewRouteData,
@@ -1646,17 +1691,17 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       riderEl.style.pointerEvents = 'auto';
       riderEl.style.cursor = 'pointer';
 
-      if (onSelectRiderPin) {
+      if (onSelectRiderPinRef.current) {
         riderEl.addEventListener('click', (e) => {
           e.stopPropagation();
-          onSelectRiderPin(rider);
+          onSelectRiderPinRef.current?.(rider);
         });
       }
 
       const marker = new mapboxgl.Marker({ element: riderEl, anchor: 'center' })
         .setLngLat([lng, lat]);
 
-      if (!onSelectRiderPin) {
+      if (!onSelectRiderPinRef.current) {
         const popup = new mapboxgl.Popup({ offset: 20, closeButton: true, maxWidth: '220px' }).setHTML(
           `<div style="padding:8px 10px;font-family:sans-serif;font-size:11px;min-width:165px;">
             <strong style="color:#15191C;display:block;font-size:12px;">${rider.name}</strong>
@@ -1670,7 +1715,7 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
       marker.addTo(map);
       mapboxIdleRidersRef.current.push(marker);
     });
-  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng, onSelectRiderPin]);
+  }, [engine, isMapLoaded, riders, isDedicatedTracking, customerCoords.lat, customerCoords.lng]);
 
   // Mapbox GL: Interactive Admin Polygon Vertex Handles
   useEffect(() => {
@@ -2098,14 +2143,14 @@ export const MapboxDeliveryMap: React.FC<MapboxDeliveryMapProps> = ({
 
   return (
     <div
-      className={`relative w-full overflow-hidden bg-[#EEF2EE] transition-all duration-300 text-left ${
+      className={`relative w-full overflow-hidden bg-[#EEF2EE] text-left ${
         isFullscreen
           ? 'fixed inset-4 z-50 h-[calc(100vh-2rem)] max-w-5xl mx-auto rounded-2xl shadow-2xl border border-black'
           : isHomeHero
-          ? `rounded-none lg:rounded-3xl lg:border lg:border-neutral-200/90 ${
+          ? `isolate z-0 rounded-none lg:rounded-3xl lg:border lg:border-neutral-200/90 ${
               heightClassName || 'h-[66dvh] min-h-[430px] lg:h-[580px]'
             }`
-          : `rounded-2xl border border-neutral-200/90 shadow-sm ${
+          : `isolate z-0 rounded-2xl border border-neutral-200/90 shadow-sm ${
               heightClassName || (isDedicatedTracking ? 'h-[300px] sm:h-[360px]' : 'h-[260px] sm:h-[320px]')
             }`
       }`}

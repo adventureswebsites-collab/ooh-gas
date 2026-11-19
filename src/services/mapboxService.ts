@@ -217,6 +217,8 @@ export async function searchPlaces(
   );
 
   if (activeToken) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
     try {
       const endpoint = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
         trimmed
@@ -224,7 +226,7 @@ export async function searchPlaces(
         activeToken
       )}&country=ke&proximity=${proximity.lng},${proximity.lat}&types=address,poi,neighborhood,locality,place&limit=6`;
 
-      const res = await fetch(endpoint);
+      const res = await fetch(endpoint, { signal: controller.signal });
       if (res.ok) {
         const data = await res.json();
         if (data.features && Array.isArray(data.features) && data.features.length > 0) {
@@ -248,17 +250,22 @@ export async function searchPlaces(
       }
     } catch (err) {
       console.error('Mapbox search error:', err);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   // Fallback to OpenStreetMap Nominatim in Kenya if online
   if (typeof fetch === 'function') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
     try {
       const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=ke&limit=5&q=${encodeURIComponent(
         `${trimmed}, Nairobi`
       )}`;
       const res = await fetch(nominatimUrl, {
         headers: { Accept: 'application/json' },
+        signal: controller.signal,
       });
       if (res.ok) {
         const items = await res.json();
@@ -288,6 +295,8 @@ export async function searchPlaces(
       }
     } catch {
       // Offline or rate-limited: fall back cleanly to curated Nairobi landmarks
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -305,12 +314,14 @@ export async function reverseGeocode(
   const activeToken = token || getMapboxToken();
 
   if (activeToken) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
     try {
       const endpoint = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${encodeURIComponent(
         activeToken
       )}&country=ke&types=address,poi,neighborhood,locality,place&limit=1`;
 
-      const res = await fetch(endpoint);
+      const res = await fetch(endpoint, { signal: controller.signal });
       if (res.ok) {
         const data = await res.json();
         const primaryFeature = data.features?.[0];
@@ -332,6 +343,8 @@ export async function reverseGeocode(
       }
     } catch (err) {
       console.error('Mapbox reverse geocoding error:', err);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -297,7 +297,7 @@ export const DestinationHomeScreen: React.FC<DestinationHomeScreenProps> = ({
         ];
 
   return (
-    <main className="relative w-full min-h-[100dvh] -mt-14 sm:-mt-16 pt-14 sm:pt-16 bg-white overflow-hidden flex flex-col justify-between pb-24 md:pb-24">
+    <main className="relative w-full min-h-[100dvh] -mt-14 sm:-mt-16 pt-14 sm:pt-16 bg-white overflow-x-clip flex flex-col justify-between pb-24 md:pb-24">
       {/* Top Abstract Soft Mint & Green Organic Wave Backdrop spanning fully into the header */}
       <div className="pointer-events-none absolute top-0 left-0 right-0 h-60 sm:h-64 overflow-hidden z-0">
         <svg

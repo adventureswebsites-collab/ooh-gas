@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import {
   ArrowLeft,
   Search,
@@ -7,6 +7,9 @@ import {
   Loader2,
   X,
   CheckCircle2,
+  Check,
+  ChevronDown,
+  ChevronUp,
   AlertTriangle,
   ArrowRight,
   Flame,
@@ -63,7 +66,8 @@ interface DestinationMapStepProps {
   ) => void;
 }
 
-const GAS_COMPANIES: Array<{ brand: 'K-Gas' | 'TotalEnergies' | 'Shell Gas'; label: string }> = [
+const GAS_COMPANIES: Array<{ brand: GasBrand; label: string }> = [
+  { brand: 'Any', label: 'Nearest' },
   { brand: 'K-Gas', label: 'K-Gas' },
   { brand: 'TotalEnergies', label: 'TotalEnergies' },
   { brand: 'Shell Gas', label: 'Shell Gas' },
@@ -116,6 +120,7 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   const [selectedBrand, setSelectedBrand] = useState<GasBrand>(initialBrandPreference);
   const [quantity, setQuantity] = useState<number>(Math.max(1, initialQuantity));
   const [purchaseType, setPurchaseType] = useState<PurchaseType>(initialPurchaseType);
+  const [isGasDrawerOpen, setIsGasDrawerOpen] = useState<boolean>(true);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -132,8 +137,6 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   // Verify zone coverage & search nearby gas stations whenever location coordinates change
   useEffect(() => {
     let active = true;
-    const minScanMs = depotSearchTrigger > 0 ? 680 : 250;
-    const startedAt = Date.now();
 
     setIsCheckingCoverage(true);
     setIsSearchingDepots(true);
@@ -143,14 +146,6 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       selectedLocation.coordinates.lng,
       zones
     )
-      .then((res) => {
-        const elapsed = Date.now() - startedAt;
-        const remaining = Math.max(0, minScanMs - elapsed);
-
-        return new Promise<CoverageCheckResult>((resolve) => {
-          setTimeout(() => resolve(res), remaining);
-        });
-      })
       .then((res) => {
         if (!active) return;
         setCoverage(res);
@@ -273,6 +268,22 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
   const selectedSizePricing = getSizePricing(selectedSize);
   const gasSubtotal = selectedSizePricing.unitPrice * quantity;
 
+  // Check stock across a specific supplier or any nearby depot
+  const getSupplierSizePricing = (sup: Supplier | null | undefined, size: CylinderSize) => {
+    const supCyl = sup?.cylinders.find((c) => c.size === size);
+    if (supCyl) {
+      return {
+        unitPrice: purchaseType === 'refill' ? supCyl.refillPrice : supCyl.completePrice,
+        inStock: supCyl.inStock !== false,
+      };
+    }
+    const bench = MARKET_BENCHMARK_PRICES[size];
+    return {
+      unitPrice: purchaseType === 'refill' ? bench.refillPrice : bench.completePrice,
+      inStock: true,
+    };
+  };
+
   // Ensure selectedSize stays on an in-stock cylinder when switching gas companies
   useEffect(() => {
     if (!selectedSizePricing.inStock) {
@@ -282,6 +293,22 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       }
     }
   }, [pricingSupplier, selectedSizePricing.inStock]);
+
+  const handleSelectCylinderSize = (sz: CylinderSize) => {
+    const currentCheck = getSizePricing(sz);
+    if (currentCheck.inStock) {
+      setSelectedSize(sz);
+      return;
+    }
+    const stockedNearby = depotSearchResult.nearbyDepots.find(
+      (d) => getSupplierSizePricing(d, sz).inStock
+    );
+    if (stockedNearby) {
+      setSelectedBrand(stockedNearby.brand);
+      setPinnedDepotId(stockedNearby.id);
+      setSelectedSize(sz);
+    }
+  };
 
   // Trigger device GPS location if customer tapped "Current location"
   const handleUseCurrentGps = () => {
@@ -437,12 +464,52 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
     });
   };
 
+  const handlePreviewRouteUpdated = useCallback(
+    (
+      next: {
+        supplierId: string;
+        distanceKm: number;
+        durationMin: number;
+        source?: 'mapbox' | 'osrm' | 'fallback';
+      } | null
+    ) => {
+      setRoadRouteInfo((prev) => {
+        if (
+          prev?.supplierId === next?.supplierId &&
+          prev?.distanceKm === next?.distanceKm &&
+          prev?.durationMin === next?.durationMin &&
+          prev?.source === next?.source
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleMapSelectSupplier = useCallback((sup: Supplier) => {
+    setPinnedDepotId(sup.id);
+    setSelectedBrand(sup.brand);
+  }, []);
+
+  const handleMapOpenLocationModal = useCallback(() => {
+    setIsDropdownOpen(true);
+  }, []);
+
+  const handleMapSelectLocation = useCallback((newLoc: NairobiLocation) => {
+    setSelectedLocation(newLoc);
+    setIsDropdownOpen(false);
+    setPinnedDepotId(null);
+    setDepotSearchTrigger((n) => n + 1);
+  }, []);
+
   const isCovered = coverage ? coverage.isCovered : true;
 
   return (
-    <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col min-h-[calc(100dvh-64px)] bg-white">
+    <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col bg-white">
       {/* Top Search Header */}
-      <div className="px-3 sm:px-5 pt-3 pb-3 border-b border-neutral-200/80 bg-white z-30">
+      <div className="relative z-40 px-3 sm:px-5 pt-3 pb-3 border-b border-neutral-200/80 bg-white">
         <div className="flex items-center justify-between gap-2 mb-2.5">
           <button
             type="button"
@@ -554,7 +621,13 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       </div>
 
       {/* Interactive Real Map (Mapbox / Leaflet) */}
-      <div className="relative flex-1 flex flex-col min-h-[290px] sm:min-h-[360px]">
+      <div
+        className={`relative isolate z-0 flex-1 flex flex-col ${
+          isGasDrawerOpen
+            ? 'min-h-[210px] sm:min-h-[300px]'
+            : 'min-h-[340px] sm:min-h-[420px]'
+        }`}
+      >
         <MapboxDeliveryMap
           isHomeHero={true}
           hideSearchOverlay={true}
@@ -568,19 +641,15 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
           onZonesUpdated={onZonesUpdated}
           highlightedSupplierId={isSearchingDepots ? null : pinnedDepotId}
           showPreviewConnection={!isSearchingDepots && Boolean(activePinnedDepot)}
-          onPreviewRouteUpdated={setRoadRouteInfo}
-          onSelectSupplierPin={(sup) => {
-            setPinnedDepotId(sup.id);
-            setSelectedBrand(sup.brand);
-          }}
-          onOpenLocationModal={() => setIsDropdownOpen(true)}
-          onSelectLocation={(newLoc) => {
-            setSelectedLocation(newLoc);
-            setIsDropdownOpen(false);
-            setPinnedDepotId(null);
-            setDepotSearchTrigger((n) => n + 1);
-          }}
-          heightClassName="flex-1 h-[38dvh] min-h-[290px] sm:h-[44dvh] sm:min-h-[360px]"
+          onPreviewRouteUpdated={handlePreviewRouteUpdated}
+          onSelectSupplierPin={handleMapSelectSupplier}
+          onOpenLocationModal={handleMapOpenLocationModal}
+          onSelectLocation={handleMapSelectLocation}
+          heightClassName={
+            isGasDrawerOpen
+              ? 'flex-1 h-[30dvh] min-h-[210px] sm:h-[38dvh] sm:min-h-[300px]'
+              : 'flex-1 h-[54dvh] min-h-[340px] sm:h-[56dvh] sm:min-h-[420px]'
+          }
         />
 
         {/* Searching Nearby Gas Stations Live Screen Overlay */}
@@ -626,175 +695,275 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
       </div>
 
       {/* Bottom "Choose your gas" Sheet with Amount, Gas Company & Cylinder kg */}
-      <div className="bg-white border-t border-neutral-200/90 rounded-t-3xl shadow-[0_-8px_30px_rgba(15,23,42,0.08)] px-4 sm:px-6 py-4 z-20 space-y-3.5">
-        {/* Title Row: "Choose your gas" + Live KSh Amount */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base sm:text-lg font-extrabold text-[#15191C] tracking-tight leading-tight">
-              Choose your gas
-            </h2>
-            <div className="flex items-center gap-1.5 text-xs text-[#6B7280] mt-0.5 truncate">
-              <MapPin className="w-3.5 h-3.5 text-[#0E8A45] shrink-0" />
-              <span className="font-semibold text-[#15191C] truncate">{selectedLocation.name}</span>
-              {!isSearchingDepots && activePinnedDepot && (
-                <span className="truncate text-[#0E8A45] font-semibold shrink-0">
-                  · {activePinnedDepot.name} (
-                  {activeRouteMetrics
-                    ? `${activeRouteMetrics.distanceKm} km · ~${activeRouteMetrics.durationMin} min`
-                    : `${activePinnedDepot.calculatedDistanceKm} km`}
-                  )
+      <div className="relative z-30 bg-white border-t border-neutral-200/90 rounded-t-3xl shadow-[0_-8px_30px_rgba(15,23,42,0.08)] px-3.5 sm:px-6 pt-2.5 pb-4 space-y-3">
+        {/* Clickable Handle + Title Row: "Choose your gas" + Live KSh Amount */}
+        <button
+          type="button"
+          onClick={() => setIsGasDrawerOpen((prev) => !prev)}
+          aria-expanded={isGasDrawerOpen}
+          className="w-full text-left group cursor-pointer touch-manipulation focus:outline-none"
+        >
+          <div className="w-10 h-1 rounded-full bg-neutral-300 group-hover:bg-[#0E8A45]/50 mx-auto mb-2 transition-colors" />
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-base sm:text-lg font-extrabold text-[#15191C] tracking-tight leading-tight">
+                  Choose your gas
+                </h2>
+                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-[#EDF6F1] text-[#0E8A45] text-[10px] font-bold">
+                  <span>{isGasDrawerOpen ? 'Hide' : 'Select'}</span>
+                  {isGasDrawerOpen ? (
+                    <ChevronDown className="w-3 h-3" />
+                  ) : (
+                    <ChevronUp className="w-3 h-3" />
+                  )}
                 </span>
-              )}
-            </div>
-          </div>
-
-          <div className="text-right shrink-0">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[#6B7280] block">
-              Amount
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-[#0E8A45] tabular-nums">
-              KSh {gasSubtotal.toLocaleString()}
-            </span>
-          </div>
-        </div>
-
-        {/* Gas Company Selection */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="font-bold text-[#6B7280]">Gas company</span>
-            <span className="font-semibold text-[#15191C]">
-              {effectiveBrandForPrice || 'Any verified depot'}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {GAS_COMPANIES.map(({ brand, label }) => {
-              const matchedDepot = depotSearchResult.nearbyDepots.find((d) => d.brand === brand);
-              const isSelected = selectedBrand === brand;
-              const isRoutedMatch =
-                Boolean(matchedDepot && roadRouteInfo && roadRouteInfo.supplierId === matchedDepot.id);
-              const displayKm = matchedDepot
-                ? isRoutedMatch && roadRouteInfo
-                  ? roadRouteInfo.distanceKm
-                  : matchedDepot.calculatedDistanceKm
-                : null;
-              const displayMin =
-                isRoutedMatch && roadRouteInfo
-                  ? roadRouteInfo.durationMin
-                  : matchedDepot
-                  ? Math.max(3, Math.round(((matchedDepot.calculatedDistanceKm * 1.32) / 22) * 60))
-                  : null;
-              return (
-                <button
-                  key={brand}
-                  type="button"
-                  onClick={() => {
-                    setSelectedBrand(brand);
-                    if (matchedDepot) setPinnedDepotId(matchedDepot.id);
-                  }}
-                  className={`min-h-[44px] px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-center ${
-                    isSelected
-                      ? 'bg-[#EDF6F1] border-[#0E8A45] text-[#0E8A45] ring-1 ring-[#0E8A45]/30'
-                      : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/45'
-                  }`}
-                >
-                  <span className="text-xs font-extrabold truncate block">{label}</span>
-                  <span className="text-[10px] font-semibold text-[#6B7280] tabular-nums truncate block">
-                    {displayKm !== null && displayMin !== null
-                      ? `${displayKm} km · ~${displayMin}m`
-                      : 'Available'}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-[#6B7280] mt-0.5 truncate">
+                <MapPin className="w-3.5 h-3.5 text-[#0E8A45] shrink-0" />
+                <span className="font-semibold text-[#15191C] truncate">{selectedLocation.name}</span>
+                {!isSearchingDepots && activePinnedDepot && (
+                  <span className="truncate text-[#0E8A45] font-semibold shrink-0">
+                    · {activePinnedDepot.name} (
+                    {activeRouteMetrics
+                      ? `${activeRouteMetrics.distanceKm} km · ~${activeRouteMetrics.durationMin} min`
+                      : `${activePinnedDepot.calculatedDistanceKm} km`}
+                    )
                   </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+                )}
+              </div>
+            </div>
 
-        {/* Cylinder Weight (kg) + Refill/New + Quantity Stepper */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold text-[#6B7280]">Cylinder size (kg)</span>
-            <div className="inline-flex items-center rounded-lg bg-[#F6F7F8] p-0.5 border border-neutral-200/80">
-              <button
-                type="button"
-                onClick={() => setPurchaseType('refill')}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
-                  purchaseType === 'refill'
-                    ? 'bg-white text-[#15191C] shadow-xs'
-                    : 'text-[#6B7280] hover:text-[#15191C]'
-                }`}
-              >
-                Refill
-              </button>
-              <button
-                type="button"
-                onClick={() => setPurchaseType('complete')}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
-                  purchaseType === 'complete'
-                    ? 'bg-white text-[#15191C] shadow-xs'
-                    : 'text-[#6B7280] hover:text-[#15191C]'
-                }`}
-              >
-                New + Gas
-              </button>
+            <div className="text-right shrink-0">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#6B7280] block">
+                Amount
+              </span>
+              <span className="text-base sm:text-lg font-extrabold text-[#0E8A45] tabular-nums">
+                KSh {gasSubtotal.toLocaleString()}
+              </span>
             </div>
           </div>
+        </button>
 
-          <div className="flex items-stretch gap-2">
-            <div className="grid grid-cols-4 gap-1.5 flex-1">
-              {QUICK_CYLINDER_SIZES.map((sz) => {
-                const { unitPrice, inStock } = getSizePricing(sz);
-                const isSelected = selectedSize === sz;
-                return (
-                  <button
-                    key={sz}
-                    type="button"
-                    disabled={!inStock}
-                    onClick={() => setSelectedSize(sz)}
-                    className={`min-h-[48px] px-1.5 py-1.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center disabled:opacity-45 disabled:cursor-not-allowed ${
-                      isSelected
-                        ? 'bg-[#0E8A45] border-[#0E8A45] text-white shadow-xs'
-                        : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/50'
-                    }`}
-                  >
-                    <span className="text-xs font-extrabold leading-tight whitespace-nowrap">
-                      {sz}
-                    </span>
-                    <span
-                      className={`text-[10px] font-semibold tabular-nums whitespace-nowrap mt-0.5 ${
-                        isSelected ? 'text-emerald-100' : 'text-[#6B7280]'
+        {/* Quick Collapsed Summary Chips when Drawer is Minimized */}
+        {!isGasDrawerOpen && (
+          <div
+            onClick={() => setIsGasDrawerOpen(true)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setIsGasDrawerOpen(true);
+              }
+            }}
+            className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-2xl bg-[#F6F7F8] hover:bg-[#EDF6F1] border border-neutral-200/80 cursor-pointer transition-colors"
+          >
+            <div className="flex items-center gap-2 min-w-0 text-xs font-bold text-[#15191C] truncate">
+              <span className="px-2 py-0.5 rounded-lg bg-[#0E8A45] text-white shrink-0">
+                {quantity}× {selectedSize}
+              </span>
+              <span className="truncate">
+                {effectiveBrandForPrice || 'Nearest Depot'} ·{' '}
+                {purchaseType === 'refill' ? 'Refill' : 'New + Gas'}
+              </span>
+            </div>
+            <span className="text-[11px] font-extrabold text-[#0E8A45] shrink-0">
+              Tap to change
+            </span>
+          </div>
+        )}
+
+        {/* Expandable Interactive Controls: Gas Company, Refill/New + Quantity, Cylinder Size (kg) */}
+        {isGasDrawerOpen && (
+          <div className="space-y-3 pt-0.5">
+            {/* Gas Company Selection (Any / K-Gas / TotalEnergies / Shell Gas) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-bold text-[#6B7280]">Gas company</span>
+                <span className="font-semibold text-[#15191C]">
+                  {selectedBrand === 'Any'
+                    ? effectiveBrandForPrice
+                      ? `Nearest (${effectiveBrandForPrice})`
+                      : 'Nearest verified depot'
+                    : selectedBrand}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {GAS_COMPANIES.map(({ brand, label }) => {
+                  const matchedDepot =
+                    brand === 'Any'
+                      ? depotSearchResult.primaryDepot
+                      : depotSearchResult.nearbyDepots.find((d) => d.brand === brand);
+                  const isSelected = selectedBrand === brand;
+                  const isRoutedMatch = Boolean(
+                    matchedDepot && roadRouteInfo && roadRouteInfo.supplierId === matchedDepot.id
+                  );
+                  const displayKm = matchedDepot
+                    ? isRoutedMatch && roadRouteInfo
+                      ? roadRouteInfo.distanceKm
+                      : matchedDepot.calculatedDistanceKm
+                    : null;
+                  const displayMin =
+                    isRoutedMatch && roadRouteInfo
+                      ? roadRouteInfo.durationMin
+                      : matchedDepot
+                      ? Math.max(3, Math.round(((matchedDepot.calculatedDistanceKm * 1.32) / 22) * 60))
+                      : null;
+
+                  return (
+                    <button
+                      key={brand}
+                      type="button"
+                      onClick={() => {
+                        const nextBrand = isSelected && brand !== 'Any' ? 'Any' : brand;
+                        setSelectedBrand(nextBrand);
+                        if (nextBrand === 'Any' && depotSearchResult.primaryDepot) {
+                          setPinnedDepotId(depotSearchResult.primaryDepot.id);
+                        } else if (matchedDepot) {
+                          setPinnedDepotId(matchedDepot.id);
+                        }
+                      }}
+                      className={`relative min-h-[48px] px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer touch-manipulation active:scale-[0.98] flex flex-col justify-center ${
+                        isSelected
+                          ? 'bg-[#EDF6F1] border-[#0E8A45] text-[#0E8A45] ring-1 ring-[#0E8A45]/30 shadow-2xs'
+                          : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/50'
                       }`}
                     >
-                      {inStock ? `KSh ${unitPrice.toLocaleString()}` : 'Out'}
-                    </span>
-                  </button>
-                );
-              })}
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-extrabold truncate">{label}</span>
+                        {isSelected && (
+                          <Check className="w-3.5 h-3.5 text-[#0E8A45] stroke-[3] shrink-0" />
+                        )}
+                      </div>
+                      <span className="text-[10px] font-semibold text-[#6B7280] tabular-nums truncate block mt-0.5">
+                        {displayKm !== null && displayMin !== null
+                          ? `${displayKm} km · ~${displayMin}m`
+                          : 'Available'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Cylinder Quantity Stepper */}
-            <div className="flex items-center gap-1 rounded-xl border border-neutral-200 bg-[#F6F7F8] px-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                aria-label="Decrease cylinder quantity"
-                className="w-8 h-9 flex items-center justify-center rounded-lg hover:bg-white text-[#15191C] cursor-pointer"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <span className="w-5 text-center text-xs font-extrabold text-[#15191C] tabular-nums">
-                {quantity}
-              </span>
-              <button
-                type="button"
-                onClick={() => setQuantity((q) => Math.min(5, q + 1))}
-                aria-label="Increase cylinder quantity"
-                className="w-8 h-9 flex items-center justify-center rounded-lg hover:bg-white text-[#15191C] cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
+            {/* Order Type (Refill / New + Gas) + Quantity Stepper */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="inline-flex items-center rounded-xl bg-[#F6F7F8] p-1 border border-neutral-200/80">
+                <button
+                  type="button"
+                  onClick={() => setPurchaseType('refill')}
+                  className={`min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation active:scale-[0.98] ${
+                    purchaseType === 'refill'
+                      ? 'bg-white text-[#0E8A45] shadow-xs'
+                      : 'text-[#6B7280] hover:text-[#15191C]'
+                  }`}
+                >
+                  Refill
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPurchaseType('complete')}
+                  className={`min-h-[36px] px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation active:scale-[0.98] ${
+                    purchaseType === 'complete'
+                      ? 'bg-white text-[#0E8A45] shadow-xs'
+                      : 'text-[#6B7280] hover:text-[#15191C]'
+                  }`}
+                >
+                  New + Gas
+                </button>
+              </div>
+
+              {/* Cylinder Quantity Stepper */}
+              <div className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 bg-[#F6F7F8] p-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                  disabled={quantity <= 1}
+                  aria-label="Decrease cylinder quantity"
+                  className="w-9 h-9 flex items-center justify-center rounded-lg bg-white border border-neutral-200/80 hover:bg-neutral-50 text-[#15191C] disabled:opacity-40 cursor-pointer touch-manipulation active:scale-95 transition-transform"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="w-6 text-center text-xs sm:text-sm font-extrabold text-[#15191C] tabular-nums">
+                  {quantity}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQuantity((q) => Math.min(5, q + 1))}
+                  disabled={quantity >= 5}
+                  aria-label="Increase cylinder quantity"
+                  className="w-9 h-9 flex items-center justify-center rounded-lg bg-[#0E8A45] hover:bg-[#0B7138] text-white disabled:opacity-40 cursor-pointer touch-manipulation active:scale-95 transition-transform"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Cylinder Weight (kg) Responsive Grid */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-bold text-[#6B7280]">Cylinder size (kg)</span>
+                <span className="font-medium text-[#6B7280]">
+                  {purchaseType === 'refill' ? 'Swap empty cylinder' : 'Full cylinder included'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {QUICK_CYLINDER_SIZES.map((sz) => {
+                  const { unitPrice, inStock } = getSizePricing(sz);
+                  const anyNearbyStocks = depotSearchResult.nearbyDepots.some(
+                    (d) => getSupplierSizePricing(d, sz).inStock
+                  );
+                  const canSelect = inStock || anyNearbyStocks || depotSearchResult.nearbyDepots.length === 0;
+                  const isSelected = selectedSize === sz;
+                  return (
+                    <button
+                      key={sz}
+                      type="button"
+                      disabled={!canSelect}
+                      onClick={() => handleSelectCylinderSize(sz)}
+                      className={`relative min-h-[56px] px-3 py-2 rounded-xl border text-left transition-all cursor-pointer touch-manipulation active:scale-[0.98] flex items-center justify-between gap-2 disabled:opacity-45 disabled:cursor-not-allowed ${
+                        isSelected
+                          ? 'bg-[#0E8A45] border-[#0E8A45] text-white shadow-sm'
+                          : 'bg-white border-neutral-200 text-[#15191C] hover:border-[#0E8A45]/60 hover:bg-[#F7FCF9]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <span className="text-sm font-extrabold leading-tight block">
+                          {sz}
+                        </span>
+                        <span
+                          className={`text-[11px] font-semibold tabular-nums block mt-0.5 ${
+                            isSelected
+                              ? 'text-emerald-100'
+                              : inStock
+                              ? 'text-[#0E8A45]'
+                              : 'text-amber-700'
+                          }`}
+                        >
+                          {inStock
+                            ? `KSh ${unitPrice.toLocaleString()}`
+                            : anyNearbyStocks
+                            ? 'Switch depot'
+                            : 'Out of stock'}
+                        </span>
+                      </div>
+                      <span
+                        className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 border ${
+                          isSelected
+                            ? 'bg-white text-[#0E8A45] border-white'
+                            : 'border-neutral-300 bg-[#F6F7F8]'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {!isSearchingDepots && !isCovered && coverage && (
           <div className="bg-rose-50 border border-rose-200 rounded-2xl px-3.5 py-2 text-xs font-medium text-rose-800 flex items-start gap-2">
@@ -810,7 +979,7 @@ export const DestinationMapStep: React.FC<DestinationMapStepProps> = ({
           type="button"
           onClick={handleConfirm}
           disabled={isSearchingDepots}
-          className={`w-full min-h-[50px] rounded-2xl font-extrabold text-sm sm:text-base shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-70 ${
+          className={`w-full min-h-[50px] rounded-2xl font-extrabold text-sm sm:text-base shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer touch-manipulation disabled:opacity-70 ${
             isCovered
               ? 'bg-[#0E8A45] hover:bg-[#0B7138] active:scale-[0.99] text-white'
               : 'bg-neutral-900 hover:bg-neutral-800 text-white'

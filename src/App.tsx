@@ -914,7 +914,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-white text-[#15191C] flex flex-col font-['Plus_Jakarta_Sans',sans-serif] overflow-x-hidden w-full relative">
+    <div className="min-h-screen bg-white text-[#15191C] flex flex-col font-['Plus_Jakarta_Sans',sans-serif] overflow-x-clip w-full relative">
       {/* Developer Viewport Test Harness (?dev=true or Alt+D) */}
       {isDevTestingMode && (
         <aside

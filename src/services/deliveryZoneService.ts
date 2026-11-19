@@ -10,12 +10,26 @@ import { MOCK_SUPPLIERS, MARKET_BENCHMARK_PRICES } from '../data/mockData';
 
 const ADMIN_TOKEN_KEY = 'ooh_gas_admin_token';
 
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 2500
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Fetches configured delivery zones from the backend API.
  */
 export async function fetchDeliveryZones(activeOnly = false): Promise<DeliveryZone[]> {
   try {
-    const res = await fetch(`/api/zones${activeOnly ? '?activeOnly=true' : ''}`);
+    const res = await fetchWithTimeout(`/api/zones${activeOnly ? '?activeOnly=true' : ''}`, {}, 2500);
     if (res.ok) {
       return await res.json();
     }
@@ -35,11 +49,15 @@ export async function checkDeliveryCoverage(
   fallbackZones: DeliveryZone[] = INITIAL_DELIVERY_ZONES
 ): Promise<CoverageCheckResult> {
   try {
-    const res = await fetch('/api/zones/check-coverage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat, lng }),
-    });
+    const res = await fetchWithTimeout(
+      '/api/zones/check-coverage',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat, lng }),
+      },
+      2500
+    );
 
     if (res.ok) {
       return await res.json();
@@ -103,11 +121,15 @@ export async function validateOrderEligibility(
   req: OrderValidationRequest
 ): Promise<OrderValidationResponse> {
   try {
-    const res = await fetch('/api/zones/validate-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    });
+    const res = await fetchWithTimeout(
+      '/api/zones/validate-order',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+      3000
+    );
 
     if (res.ok) {
       return await res.json();

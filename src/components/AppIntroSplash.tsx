@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface AppIntroSplashProps {
   onComplete: () => void;
@@ -7,31 +7,33 @@ interface AppIntroSplashProps {
 
 export const AppIntroSplash: React.FC<AppIntroSplashProps> = ({
   onComplete,
-  durationMs = 3600,
+  durationMs = 2800,
 }) => {
   const [isExiting, setIsExiting] = useState(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   useEffect(() => {
     const prefersReducedMotion =
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const totalMs = prefersReducedMotion ? 1400 : durationMs;
-    const fadeStartMs = Math.max(400, totalMs - 380);
+    const totalMs = prefersReducedMotion ? 1100 : durationMs;
+    const fadeStartMs = Math.max(400, totalMs - 320);
 
     const fadeTimer = window.setTimeout(() => {
       setIsExiting(true);
     }, fadeStartMs);
 
     const doneTimer = window.setTimeout(() => {
-      onComplete();
+      onCompleteRef.current();
     }, totalMs);
 
     return () => {
       window.clearTimeout(fadeTimer);
       window.clearTimeout(doneTimer);
     };
-  }, [durationMs, onComplete]);
+  }, [durationMs]);
 
   return (
     <div
