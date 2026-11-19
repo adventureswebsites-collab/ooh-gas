@@ -1,6 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
-import { OohGasLogo } from './BrandIdentities';
 
 interface AppIntroSplashProps {
   onComplete: () => void;
@@ -35,13 +33,6 @@ export const AppIntroSplash: React.FC<AppIntroSplashProps> = ({
     };
   }, [durationMs, onComplete]);
 
-  const handleSkip = () => {
-    setIsExiting(true);
-    window.setTimeout(() => {
-      onComplete();
-    }, 220);
-  };
-
   return (
     <div
       role="region"
@@ -50,21 +41,8 @@ export const AppIntroSplash: React.FC<AppIntroSplashProps> = ({
         isExiting ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}
     >
-      {/* Top Bar: Clean Ooh Gas Logo + Skip Button */}
-      <header className="relative z-20 w-full max-w-6xl mx-auto px-5 sm:px-8 pt-5 sm:pt-7 flex items-center justify-between gap-4">
-        <OohGasLogo showTagline={false} />
-        <button
-          type="button"
-          onClick={handleSkip}
-          className="min-h-[44px] px-4 py-2 rounded-full bg-white/90 hover:bg-[#EDF6F1] border border-neutral-200/80 text-xs sm:text-sm font-bold text-[#226946] flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
-        >
-          <span>Skip</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </header>
-
       {/* Center Hero Headline */}
-      <div className="relative z-20 w-full max-w-2xl mx-auto px-5 text-center pt-2 sm:pt-4">
+      <div className="relative z-20 w-full max-w-2xl mx-auto px-5 text-center pt-14 sm:pt-20">
         <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-[#15191C] leading-[1.1] [text-wrap:balance]">
           Cooking gas on the move.
         </h1>
@@ -337,24 +315,14 @@ export const AppIntroSplash: React.FC<AppIntroSplashProps> = ({
         </div>
       </div>
 
-      {/* Bottom Progress Bar & Direct CTA */}
-      <footer className="relative z-20 bg-[#242C32] text-white px-5 sm:px-8 pb-6 pt-3">
-        <div className="max-w-md mx-auto space-y-3">
+      {/* Bottom Progress Bar */}
+      <footer className="relative z-20 bg-[#242C32] text-white px-5 sm:px-8 pb-6 pt-4">
+        <div className="max-w-md mx-auto">
           <div className="w-full h-1.5 rounded-full bg-white/15 overflow-hidden">
             <div
               className="intro-progress-fill h-full w-full rounded-full bg-[#22C55E]"
               style={{ animationDuration: `${durationMs}ms` }}
             />
-          </div>
-          <div className="flex items-center justify-between text-xs text-neutral-300">
-            <span className="font-semibold text-white">Ooh Gas Nairobi Express</span>
-            <button
-              type="button"
-              onClick={handleSkip}
-              className="font-bold text-emerald-300 hover:text-emerald-200 py-1 px-2 cursor-pointer"
-            >
-              Enter app →
-            </button>
           </div>
         </div>
       </footer>
